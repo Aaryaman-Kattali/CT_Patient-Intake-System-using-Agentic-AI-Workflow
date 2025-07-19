@@ -1,0 +1,12 @@
+google-generativeai
+python-dotenv>=1.0.0        #helps in pulling the api keys for .env
+streamlit>=1.28.0
+fastapi
+pydantic
+langchain
+uvicorn
+phidata
+google-adk
+pathlib
+google-adk-agents
+gradio

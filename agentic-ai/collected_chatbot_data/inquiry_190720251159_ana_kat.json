@@ -1,0 +1,15 @@
+{
+    "user_id": "190720251159",
+    "client_name": "Ana Kat",
+    "client_dob": "2004-11-11",
+    "client_gender": "Male",
+    "client_email": "patient@example.com",
+    "client_phone": "202-555-0100",
+    "client_address": "504 Valentina",
+    "relationship": "Sibling",
+    "inquiry_reason": "Diagnosis",
+    "preferred_contact_method": "Phone",
+    "contact_details": "already given",
+    "record_type": "family_inquiry",
+    "created_at": "2025-07-19T12:03:33.111137"
+}
