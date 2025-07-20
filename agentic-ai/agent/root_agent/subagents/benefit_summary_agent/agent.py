@@ -11,260 +11,131 @@ class BenefitSummaryRequest(BaseModel):
     user_input: str = Field(description="User's request for benefit summary")
     use_synthetic_data: bool = Field(default=True, description="Whether to use synthetic data")
 
-def debug_step(step_name: str, step_number: int, data=None):
-    """Debug helper function to track execution steps"""
-    print(f"\n🔍 DEBUG STEP {step_number}: {step_name}")
-    print(f"   Status: EXECUTING")
-    if data:
-        print(f"   Data type: {type(data)}")
-        if isinstance(data, dict):
-            print(f"   Data keys: {list(data.keys())}")
-    return True
-
 def safe_import_modules():
-    """Safely import required modules with debug info"""
-    debug_results = {
-        'benefit_check_summary': False,
-        'benefit_check_form': False,
-        'generate_benefit_summary_from_raw_data': False,
-        'generate_synthetic_benefit_check_data': False
-    }
-    
+    """Safely import required modules"""
     try:
-        debug_step("Importing benefit_check_summary module", 1)
         from model.benefit_check_summary import generate_benefit_summary_from_raw_data
-        debug_results['benefit_check_summary'] = True
-        debug_results['generate_benefit_summary_from_raw_data'] = True
-        print("   ✅ Successfully imported generate_benefit_summary_from_raw_data")
-    except Exception as e:
-        print(f"   ❌ Failed to import benefit_check_summary: {str(e)}")
-        return debug_results, None, None
-    
-    try:
-        debug_step("Importing benefit_check_form module", 2)
         from model.benefit_check_form import generate_synthetic_benefit_check_data
-        debug_results['benefit_check_form'] = True
-        debug_results['generate_synthetic_benefit_check_data'] = True
-        print("   ✅ Successfully imported generate_synthetic_benefit_check_data")
+        return True, generate_benefit_summary_from_raw_data, generate_synthetic_benefit_check_data
     except Exception as e:
-        print(f"   ❌ Failed to import benefit_check_form: {str(e)}")
-        return debug_results, None, None
-    
-    return debug_results, generate_benefit_summary_from_raw_data, generate_synthetic_benefit_check_data
+        return False, None, None
 
 def handle_user_request(user_input: str, use_synthetic_data: bool = True) -> str:
     """
-    SIMPLIFIED function for ADK compatibility
+    Generate benefit summary and return the actual summary text content
     
     Args:
         user_input: User's request for benefit summary
         use_synthetic_data: Whether to use synthetic data (default: True)
         
     Returns:
-        JSON string with summary results and debug information
+        The actual benefit summary text content (not debug info)
     """
-    debug_info = []
     
     try:
-        debug_info.append("Starting benefit summary generation")
-        print("\n🚀 STARTING BENEFIT SUMMARY GENERATION")
-        print("="*60)
+        # Import modules
+        import_success, summary_func, synthetic_func = safe_import_modules()
         
-        # Step 1: Process input
-        debug_step("Processing request input", 1)
-        debug_info.append(f"User input: {user_input}")
-        debug_info.append(f"Use synthetic data: {use_synthetic_data}")
-        print(f"   ✅ Request validation passed")
+        if not import_success:
+            return "ERROR: Unable to import required modules for benefit summary generation."
         
-        # Step 2: Import modules
-        debug_step("Importing required modules", 2)
-        import_results, summary_func, synthetic_func = safe_import_modules()
-        
-        if not all([import_results['benefit_check_summary'], import_results['benefit_check_form']]):
-            error_msg = f"Module import failed: {import_results}"
-            debug_info.append(error_msg)
-            result = {
-                'status': 'error',
-                'message': error_msg,
-                'summary_text': '',
-                'filename': '',
-                'debug_info': debug_info
-            }
-            return json.dumps(result, indent=2, default=str)
-        
-        # Step 3: Generate synthetic data (always use synthetic for now)
-        debug_step("Generating synthetic benefit check data", 3)
-        debug_info.append("Using synthetic data")
-        print("   📝 Generating synthetic benefit check data...")
-        
+        # Generate synthetic data
         try:
             synthetic_form = synthetic_func()
-            debug_info.append(f"Synthetic form type: {type(synthetic_form)}")
-            print(f"   ✅ Synthetic form generated: {type(synthetic_form)}")
-            
-            # Convert to dictionary
             benefit_data = synthetic_form.model_dump()
-            debug_info.append(f"Benefit data keys: {list(benefit_data.keys())}")
-            print(f"   ✅ Converted to dict with {len(benefit_data)} keys")
-            
         except Exception as e:
-            error_msg = f"Failed to generate synthetic data: {str(e)}"
-            debug_info.append(error_msg)
-            debug_info.append(f"Traceback: {traceback.format_exc()}")
-            result = {
-                'status': 'error',
-                'message': error_msg,
-                'summary_text': '',
-                'filename': '',
-                'debug_info': debug_info
-            }
-            return json.dumps(result, indent=2, default=str)
+            return f"ERROR: Failed to generate synthetic benefit data: {str(e)}"
         
-        # Step 4: Generate summary
-        debug_step("Generating benefit summary", 4, benefit_data)
-        debug_info.append("Calling generate_benefit_summary_from_raw_data")
-        
+        # Generate summary
         try:
             result = summary_func(benefit_data)
-            debug_info.append(f"Summary result keys: {list(result.keys()) if isinstance(result, dict) else 'Not a dict'}")
-            print(f"   ✅ Summary generated successfully")
             
-            # Verify result structure
-            if not isinstance(result, dict):
-                error_msg = f"Summary function returned {type(result)}, expected dict"
-                debug_info.append(error_msg)
-                result = {
-                    'status': 'error',
-                    'message': error_msg,
-                    'summary_text': '',
-                    'filename': '',
-                    'debug_info': debug_info
-                }
-                return json.dumps(result, indent=2, default=str)
-            
+            # Extract the actual summary text from the result
+            if isinstance(result, dict) and 'summary_text' in result:
+                return result['summary_text']
+            else:
+                return "ERROR: Summary generation did not return expected format."
+                
         except Exception as e:
-            error_msg = f"Failed to generate summary: {str(e)}"
-            debug_info.append(error_msg)
-            debug_info.append(f"Traceback: {traceback.format_exc()}")
-            result = {
-                'status': 'error',
-                'message': error_msg,
-                'summary_text': '',
-                'filename': '',
-                'debug_info': debug_info
-            }
-            return json.dumps(result, indent=2, default=str)
-        
-        # Step 5: Prepare final result
-        debug_step("Preparing final result", 5)
-        result['status'] = 'success'
-        result['message'] = 'Benefit summary generated successfully'
-        result['data_source'] = 'synthetic_data' if use_synthetic_data else 'provided_data'
-        result['debug_info'] = debug_info
-        
-        print("   ✅ Final result prepared")
-        print("="*60)
-        print("🎉 BENEFIT SUMMARY GENERATION COMPLETED SUCCESSFULLY!")
-        
-        return json.dumps(result, indent=2, default=str)
+            return f"ERROR: Failed to generate benefit summary: {str(e)}"
         
     except Exception as e:
-        error_msg = f"Unexpected error in handle_user_request: {str(e)}"
-        debug_info.append(error_msg)
-        debug_info.append(f"Full traceback: {traceback.format_exc()}")
-        
-        print(f"\n❌ CRITICAL ERROR: {error_msg}")
-        print("="*60)
-        
-        result = {
-            'status': 'error',
-            'message': error_msg,
-            'summary_text': '',
-            'filename': '',
-            'debug_info': debug_info
-        }
-        return json.dumps(result, indent=2, default=str)
+        return f"ERROR: Unexpected error in benefit summary generation: {str(e)}"
 
 def debug_environment() -> str:
-    """Debug the environment and available modules - returns JSON string"""
-    debug_info = []
-    
-    print("\n🔧 ENVIRONMENT DEBUG")
-    print("="*40)
-    
-    # Check Python path
-    import sys
-    print(f"Python path: {sys.path}")
-    debug_info.append(f"Python path: {sys.path}")
-    
-    # Check current working directory
-    import os
-    print(f"Current working directory: {os.getcwd()}")
-    debug_info.append(f"Current working directory: {os.getcwd()}")
-    
-    # Check if model directory exists
-    model_dir = os.path.join(os.getcwd(), 'model')
-    print(f"Model directory exists: {os.path.exists(model_dir)}")
-    debug_info.append(f"Model directory exists: {os.path.exists(model_dir)}")
-    
-    if os.path.exists(model_dir):
-        model_files = os.listdir(model_dir)
-        print(f"Model directory contents: {model_files}")
-        debug_info.append(f"Model directory contents: {model_files}")
-    
-    # Try to import each module individually
-    modules_to_test = [
-        'model.benefit_check_summary',
-        'model.benefit_check_form'
-    ]
-    
-    for module_name in modules_to_test:
+    """Debug the environment - only for troubleshooting"""
+    try:
+        import os
+        import sys
+        
+        debug_info = []
+        debug_info.append(f"Current working directory: {os.getcwd()}")
+        debug_info.append(f"Python path includes model directory: {'model' in str(sys.path)}")
+        
+        # Check model directory
+        model_dir = os.path.join(os.getcwd(), 'model')
+        if os.path.exists(model_dir):
+            model_files = os.listdir(model_dir)
+            debug_info.append(f"Model directory files: {model_files}")
+        else:
+            debug_info.append("Model directory not found")
+        
+        # Test imports
         try:
-            __import__(module_name)
-            print(f"✅ Successfully imported {module_name}")
-            debug_info.append(f"Successfully imported {module_name}")
+            from model.benefit_check_summary import generate_benefit_summary_from_raw_data
+            debug_info.append("✅ benefit_check_summary import successful")
         except Exception as e:
-            print(f"❌ Failed to import {module_name}: {str(e)}")
-            debug_info.append(f"Failed to import {module_name}: {str(e)}")
-    
-    return json.dumps({"debug_info": debug_info}, indent=2)
+            debug_info.append(f"❌ benefit_check_summary import failed: {str(e)}")
+        
+        try:
+            from model.benefit_check_form import generate_synthetic_benefit_check_data
+            debug_info.append("✅ benefit_check_form import successful")
+        except Exception as e:
+            debug_info.append(f"❌ benefit_check_form import failed: {str(e)}")
+        
+        return "\n".join(debug_info)
+        
+    except Exception as e:
+        return f"Debug environment check failed: {str(e)}"
 
-# SIMPLIFIED system prompt for ADK compatibility
+# UPDATED system prompt that focuses on displaying the benefit summary content
 system_prompt = """
-You are a debug-enabled benefit summary agent that generates comprehensive insurance benefit summaries.
+You are a benefit summary generation agent that creates comprehensive insurance benefit summaries.
 
 Your workflow:
-1. When asked to generate a benefit summary, call handle_user_request with the user's request
-2. Display the debug information and results clearly
-3. If there are errors, show the debug information to help identify issues
-4. After completing the task, transfer control back to the root agent
-
-Available tools:
-- handle_user_request(user_input, use_synthetic_data=True): Generate benefit summary
-- debug_environment(): Debug the system environment
+1. When a user requests a benefit summary, use the handle_user_request function
+2. Display the complete benefit summary text directly to the user
+3. Do NOT show debug information unless there's an error
+4. After successfully showing the benefit summary, transfer back to the root agent
 
 Instructions:
 - Always use synthetic data by default
-- Display results in a clear, organized format
-- Show debug information to help troubleshoot issues
-- After showing results, transfer back to root agent using transfer_to_agent(agent_name='root_patient_intake_agent')
+- Display the full benefit summary text in a clear, readable format
+- Only show debug information if there are errors that need troubleshooting
+- Keep responses focused on the benefit summary content, not the generation process
 
-Response format:
-🔍 DEBUG INFORMATION:
-[Show debug steps and system info]
+Response format for successful generation:
+📋 **BENEFIT SUMMARY GENERATED**
 
-📋 BENEFIT SUMMARY RESULT:
-[Show the generated summary or error details]
+[Display the complete benefit summary text here]
 
-🔄 NEXT STEPS:
-[Indicate transfer back to root agent]
+---
+✅ Summary generated successfully. Transferring back to main menu...
+
+Response format for errors:
+❌ **ERROR GENERATING BENEFIT SUMMARY**
+
+[Brief error description and any necessary debug info]
+
+After displaying results (success or error), always call:
+transfer_to_agent(agent_name='root_patient_intake_agent')
 """
 
-# Create the simplified benefit summary agent
+# Create the benefit summary agent
 benefit_agent = LlmAgent(
     name="benefit_summary_agent",
     model="gemini-2.0-flash",
-    description="Debug-enabled benefit summary agent that generates comprehensive benefit summaries with detailed debugging information",
+    description="Generates comprehensive insurance benefit summaries with focus on displaying the actual summary content",
     instruction=system_prompt,
     output_key="benefit_summary_result",
     tools=[handle_user_request, debug_environment]
