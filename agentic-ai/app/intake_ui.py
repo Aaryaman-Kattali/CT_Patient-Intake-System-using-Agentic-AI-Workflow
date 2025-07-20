@@ -349,9 +349,28 @@ def get_agent_avatar(agent_name):
     }
     return agent_avatars.get(agent_name, "🤖")
 
+# Main UI Layout with styled header
+st.markdown(
+    """
+    <div style="
+        background: linear-gradient(90deg, #2E86AB 0%, #A23B72 100%);
+        color: white;
+        padding: 1rem 2rem;
+        border-radius: 10px;
+        text-align: center;
+        margin-bottom: 1rem;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    ">
+        <h1 style="margin: 0; font-size: 2.5rem;">🏥 Patient Intake System</h1>
+        <p style="margin: 0.5rem 0 0 0; font-style: italic; opacity: 0.9;">Streamlined patient intake process with intelligent agent assistance</p>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
+
 # Main UI Layout
-st.title("🏥 Patient Intake System")
-st.markdown("*Streamlined patient intake process with intelligent agent assistance*")
+#st.title("🏥 Patient Intake System")
+#st.markdown("*Streamlined patient intake process with intelligent agent assistance*")
 
 # Create sidebar for session management and system info
 with st.sidebar:
