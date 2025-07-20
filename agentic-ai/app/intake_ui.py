@@ -3,6 +3,7 @@ Patient Intake Agent Chat Application
 ====================================
 
 This Streamlit application provides a chat interface for interacting with the ADK Patient Intake Agent.
+It uses Streamlit's built-in chat elements (st.chat_message and st.chat_input) for a proper chat experience.
 It allows users to handle patient intake processes, create sessions, and interact with multiple subagents
 (data collection agent and email agent) through a unified interface.
 
@@ -329,45 +330,45 @@ def get_agent_display_name(agent_name):
     }
     return agent_names.get(agent_name, agent_name.replace("_", " ").title())
 
-def get_agent_color(agent_name):
+def get_agent_avatar(agent_name):
     """
-    Get color coding for different agents for better visual distinction.
+    Get avatar/emoji for different agents for better visual distinction.
     
     Args:
         agent_name (str): Internal agent name
         
     Returns:
-        str: CSS color value
+        str: Emoji or character to use as avatar
     """
-    agent_colors = {
-        "root_patient_intake_agent": "#2E86AB",  # Blue
-        "data_collector_agent": "#A23B72",      # Purple
-        "email_agent": "#F18F01",               # Orange
-        "system": "#6C757D",                    # Gray
-        "unknown": "#6C757D"                    # Gray
+    agent_avatars = {
+        "root_patient_intake_agent": "🏥",
+        "data_collector_agent": "📋",
+        "email_agent": "📧",
+        "system": "⚙️",
+        "unknown": "🤖"
     }
-    return agent_colors.get(agent_name, "#6C757D")
+    return agent_avatars.get(agent_name, "🤖")
 
 # Main UI Layout
 st.title("🏥 Patient Intake System")
 st.markdown("*Streamlined patient intake process with intelligent agent assistance*")
 
-# Create two columns for better layout
-col1, col2 = st.columns([3, 1])
-
-with col2:
-    # Sidebar for session management and system info
+# Create sidebar for session management and system info
+with st.sidebar:
+    st.header("🏥 Patient Intake System")
+    st.divider()    
     st.subheader("Session Management")
     
     # Display current session status
     if st.session_state.session_id:
         st.success("✅ Active Session")
-        st.caption(f"Session: {st.session_state.session_id}")
-        st.caption(f"User: {st.session_state.user_id}")
+        #st.caption(f"Session: {st.session_state.session_id}")
+        #st.caption(f"User: {st.session_state.user_id}")
         
         # Show current agent
         current_agent_display = get_agent_display_name(st.session_state.current_agent)
-        st.info(f"🤖 Current Agent: {current_agent_display}")
+        current_agent_avatar = get_agent_avatar(st.session_state.current_agent)
+        st.info(f"{current_agent_avatar} Current Agent: {current_agent_display}")
         
         # New session button
         if st.button("🔄 New Session", help="Start a fresh intake session"):
@@ -402,144 +403,104 @@ with col2:
     st.divider()
     
     # Quick action buttons for common intake types
-    st.subheader("Quick Actions")
-    if st.session_state.session_id:
-        if st.button("👨‍👩‍👧‍👦 Family Inquiry", help="Start family inquiry process"):
-            send_message("This is a Family Inquiry")
-            st.rerun()
+    # st.subheader("Quick Actions")
+    # if st.session_state.session_id:
+    #     if st.button("👨‍👩‍👧‍👦 Family Inquiry", help="Start family inquiry process"):
+    #         if send_message("This is a Family Inquiry"):
+    #             st.rerun()
             
-        if st.button("🏥 Provider Referral", help="Start provider referral process"):
-            send_message("This is a Provider Referral")
-            st.rerun()
-    else:
-        st.caption("Create a session to use quick actions")
+    #     if st.button("🏥 Provider Referral", help="Start provider referral process"):
+    #         if send_message("This is a Provider Referral"):
+    #             st.rerun()
+    # else:
+    #     st.caption("Create a session to use quick actions")
+        
+    # Helpful tips
+    with st.expander("💡 Usage Tips"):
+        st.markdown("""
+        **Getting Started:**
+        - Specify if this is a "Family Inquiry" or "Provider Referral"
+        - The system will guide you through the appropriate workflow
+        
+        **During Data Collection:**
+        - Provide accurate patient information when requested
+        - The data collector will ask for specific details step by step
+        
+        **Email Process:**
+        - Confirmation emails will be sent automatically
+        - You'll be notified when emails are sent successfully
+        
+        **Agent Transfers:**
+        - The system automatically transfers you between specialists
+        - Each agent has specific expertise (intake, data collection, email)
+        """)
 
-with col1:
-    # Main chat interface
-    st.subheader("💬 Conversation")
-    
-    # Create a container for messages with custom styling
-    message_container = st.container()
-    
-    with message_container:
-        # Display conversation history
-        if st.session_state.messages:
-            for i, msg in enumerate(st.session_state.messages):
-                # Determine message type and styling
-                if msg["role"] == "user":
-                    # User messages - right aligned with blue background
-                    st.markdown(
-                        f"""
-                        <div style="text-align: right; margin: 10px 0;">
-                            <div style="display: inline-block; background-color: #E3F2FD; 
-                                    padding: 10px 15px; border-radius: 18px; max-width: 70%;
-                                    border: 1px solid #BBDEFB;">
-                                <strong style="color: #000000;">You:</strong> <span style="color: #000000;">{msg['content']}</span><br>
-                                <small style="color: #666;">{msg.get('timestamp', '')}</small>
-                            </div>
-                        </div>
-                        """, 
-                        unsafe_allow_html=True
-                    )
-                
-                elif msg["role"] == "system":
-                    # System messages - centered with gray background
-                    st.markdown(
-                        f"""
-                        <div style="text-align: center; margin: 15px 0;">
-                            <div style="display: inline-block; background-color: #F5F5F5; 
-                                      padding: 8px 12px; border-radius: 12px; 
-                                      border: 1px solid #E0E0E0; font-style: italic;">
-                                {msg['content']}
-                                <br><small style="color: #666;">
-                                {msg.get('timestamp', '')}</small>
-                            </div>
-                        </div>
-                        """, 
-                        unsafe_allow_html=True
-                    )
-                
-                else:
-                    # Assistant messages - left aligned with agent-specific colors
-                    agent_name = msg.get("agent", "unknown")
-                    agent_display = get_agent_display_name(agent_name)
-                    agent_color = get_agent_color(agent_name)
+# Main chat interface
+st.subheader("💬 Conversation")
+
+# Display chat messages from history using Streamlit's native chat components
+if st.session_state.messages:
+    for message in st.session_state.messages:
+        if message["role"] == "user":
+            # Display user messages
+            with st.chat_message("user"):
+                st.markdown(message["content"])
+                if message.get("timestamp"):
+                    st.caption(f"⏰ {message['timestamp']}")
                     
-                    st.markdown(
-                        f"""
-                        <div style="text-align: left; margin: 10px 0;">
-                            <div style="display: inline-block; background-color: white; 
-                                    padding: 10px 15px; border-radius: 18px; max-width: 80%;
-                                    border-left: 4px solid {agent_color}; 
-                                    box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
-                                <strong style="color: {agent_color};">{agent_display}:</strong><br>
-                                <span style="color: #000000;">{msg['content']}</span><br>
-                                <small style="color: #666;">{msg.get('timestamp', '')}</small>
-                            </div>
-                        </div>
-                        """, 
-                        unsafe_allow_html=True
-                    )
-        else:
-            # Show placeholder when no messages
-            st.info("👋 Welcome! Create a session to start the patient intake process.")
-    
-    # Message input area
-    st.divider()
-    
-    # Only show input if session exists
-    if st.session_state.session_id:
-        # Create input form
-        with st.form(key="message_form", clear_on_submit=True):
-            col_input, col_send = st.columns([4, 1])
-            
-            with col_input:
-                user_input = st.text_area(
-                    "Your message:",
-                    placeholder="Type your message here... (e.g., 'This is a Family Inquiry' or ask questions about the intake process)",
-                    height=80,
-                    key="user_message_input"
-                )
-            
-            with col_send:
-                st.markdown("<br>", unsafe_allow_html=True)  # Add spacing
-                send_button = st.form_submit_button("📤 Send", use_container_width=True)
-            
-            # Handle form submission
-            if send_button and user_input.strip():
-                if send_message(user_input.strip()):
-                    st.rerun()
+        elif message["role"] == "system":
+            # Display system messages with custom avatar
+            with st.chat_message("assistant", avatar="⚙️"):
+                st.markdown(f"*{message['content']}*")
+                if message.get("timestamp"):
+                    st.caption(f"⏰ {message['timestamp']}")
                     
-        # Helpful tips
-        with st.expander("💡 Tips for using the system"):
-            st.markdown("""
-            **Getting Started:**
-            - Specify if this is a "Family Inquiry" or "Provider Referral"
-            - The system will guide you through the appropriate workflow
+        else:  # assistant messages
+            # Get agent-specific avatar and display name
+            agent_name = message.get("agent", "unknown")
+            agent_avatar = get_agent_avatar(agent_name)
+            agent_display = get_agent_display_name(agent_name)
             
-            **During Data Collection:**
-            - Provide accurate patient information when requested
-            - The data collector will ask for specific details step by step
-            
-            **Email Process:**
-            - Confirmation emails will be sent automatically
-            - You'll be notified when emails are sent successfully
-            
-            **Agent Transfers:**
-            - The system automatically transfers you between specialists
-            - Each agent has specific expertise (intake, data collection, email)
-            """)
+            with st.chat_message("assistant", avatar=agent_avatar):
+                # Show which agent is responding
+                st.markdown(f"**{agent_display}:**")
+                st.markdown(message["content"])
+                if message.get("timestamp"):
+                    st.caption(f"⏰ {message['timestamp']}")
+else:
+    # Show placeholder when no messages and no session
+    if not st.session_state.session_id:
+        st.info("👋 Welcome! Create a session to start the patient intake process.")
     else:
-        st.info("👆 Please create a session first to start chatting with the intake system.")
+        # Show the welcome message area
+        st.info("💬 Session created! Start chatting below.")
+
+# Chat input - only show if session exists
+if st.session_state.session_id:
+    # Use Streamlit's native chat input
+    if prompt := st.chat_input(
+        "Type your message here...",
+        key="chat_input"
+    ):
+        # Send the message and rerun to update the chat
+        if send_message(prompt):
+            st.rerun()
+else:
+    # Show disabled chat input with instructions
+    st.chat_input(
+        "Please create a session first to start chatting...",
+        disabled=True,
+        key="disabled_chat_input"
+    )
 
 # Footer with additional information
 st.divider()
-st.markdown(
-    """
-    <div style="text-align: center; color: #666; font-size: 0.8em;">
-        Patient Intake System | Powered by ADK Multi-Agent Architecture<br>
-        For technical support, ensure the ADK API Server is running on port 8000
-    </div>
-    """, 
-    unsafe_allow_html=True
-)
+# st.markdown(
+#     """
+#     <div style="text-align: center; color: #666; font-size: 0.8em; padding: 20px;">
+#         Patient Intake System | Powered by ADK Multi-Agent Architecture<br>
+#         For technical support, ensure the ADK API Server is running on port 8000
+#     </div>
+#     """, 
+#     unsafe_allow_html=True
+# )
