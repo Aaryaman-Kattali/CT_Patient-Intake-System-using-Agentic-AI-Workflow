@@ -15,18 +15,77 @@ model_path = os.path.join(project_root, 'model')
 if model_path not in sys.path:
     sys.path.insert(0, model_path)
 
-# Import from the model directory
-from model.soap_note import SOAPNote, create_synthetic_soap_note
-
 class SOAPNoteRequest(BaseModel):
-    """Request model for SOAP note generation"""
+    """Simplified request model for SOAP note generation"""
     user_input: str = Field(description="User's request for SOAP note generation")
-    client_id: Optional[int] = Field(default=None, description="Client ID")
-    client_first_name: Optional[str] = Field(default=None, description="Client first name")
-    client_last_name: Optional[str] = Field(default=None, description="Client last name")
-    birth_date: Optional[str] = Field(default=None, description="Birth date (YYYY-MM-DD)")
-    created_by: Optional[str] = Field(default="System", description="Created by")
-    num_notes: int = Field(default=1, description="Number of notes to generate")
+    use_synthetic_data: bool = Field(default=True, description="Whether to use synthetic data")
+
+def safe_import_modules():
+    """Safely import required modules"""
+    try:
+        from model.soap_note import SOAPNote, create_synthetic_soap_note, SOAPNoteTextGenerator
+        return True, SOAPNote, create_synthetic_soap_note, SOAPNoteTextGenerator
+    except Exception as e:
+        return False, None, None, None
+
+def handle_user_request(user_input: str, use_synthetic_data: bool = True) -> str:
+    """
+    Generate SOAP note and return the actual SOAP note text content
+    
+    Args:
+        user_input: User's request for SOAP note generation
+        use_synthetic_data: Whether to use synthetic data (default: True)
+        
+    Returns:
+        The actual SOAP note text content (not debug info)
+    """
+    
+    try:
+        # Import modules
+        import_success, SOAPNote, create_synthetic_soap_note, SOAPNoteTextGenerator = safe_import_modules()
+        
+        if not import_success:
+            return "ERROR: Unable to import required modules for SOAP note generation."
+        
+        # Generate synthetic SOAP note
+        try:
+            import random
+            
+            # Generate random client data
+            first_names = ["John", "Jane", "Michael", "Sarah", "David", "Emily", "James", "Jessica", "Christopher", "Ashley"]
+            last_names = ["Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller", "Davis", "Rodriguez", "Martinez"]
+            
+            random_id = random.randint(10000, 99999)
+            random_first = random.choice(first_names)
+            random_last = random.choice(last_names)
+            random_birth = date(random.randint(1950, 2005), random.randint(1, 12), random.randint(1, 28))
+            
+            soap_note = create_synthetic_soap_note(
+                client_id=random_id,
+                client_first_name=random_first,
+                client_last_name=random_last,
+                birth_date=random_birth,
+                created_by="Dr. System"
+            )
+        except Exception as e:
+            return f"ERROR: Failed to generate synthetic SOAP note data: {str(e)}"
+        
+        # Generate SOAP note text
+        try:
+            generator = SOAPNoteTextGenerator(soap_note)
+            result = generator.get_soap_note_display()
+            
+            # Extract the actual SOAP note text from the result
+            if isinstance(result, dict) and 'soap_note_text' in result:
+                return result['soap_note_text']
+            else:
+                return "ERROR: SOAP note generation did not return expected format."
+                
+        except Exception as e:
+            return f"ERROR: Failed to generate SOAP note text: {str(e)}"
+        
+    except Exception as e:
+        return f"ERROR: Unexpected error in SOAP note generation: {str(e)}"
 
 def handle_soap_note_request(
     user_input: str,
@@ -37,8 +96,18 @@ def handle_soap_note_request(
     created_by: str = "System",
     num_notes: int = 1
 ) -> str:
-    """Generate SOAP notes based on user request"""
+    """Generate SOAP notes based on user request - legacy function for backwards compatibility"""
     try:
+        import_success, SOAPNote, create_synthetic_soap_note, SOAPNoteTextGenerator = safe_import_modules()
+        
+        if not import_success:
+            return json.dumps({
+                'status': 'error',
+                'message': 'Unable to import required modules',
+                'soap_notes': [],
+                'count': 0
+            }, indent=2)
+        
         generated_notes = []
         
         for i in range(num_notes):
@@ -126,32 +195,84 @@ def generate_random_soap_notes(num_notes: int = 5) -> str:
         num_notes=num_notes
     )
 
-# System prompt for the agent
+def debug_environment() -> str:
+    """Debug the environment - only for troubleshooting"""
+    try:
+        import os
+        import sys
+        
+        debug_info = []
+        debug_info.append(f"Current working directory: {os.getcwd()}")
+        debug_info.append(f"Python path includes model directory: {'model' in str(sys.path)}")
+        
+        # Check model directory
+        model_dir = os.path.join(os.getcwd(), 'model')
+        if os.path.exists(model_dir):
+            model_files = os.listdir(model_dir)
+            debug_info.append(f"Model directory files: {model_files}")
+        else:
+            debug_info.append("Model directory not found")
+        
+        # Test imports
+        try:
+            from model.soap_note import SOAPNote, create_synthetic_soap_note, SOAPNoteTextGenerator
+            debug_info.append("✅ soap_note imports successful")
+        except Exception as e:
+            debug_info.append(f"❌ soap_note imports failed: {str(e)}")
+        
+        return "\n".join(debug_info)
+        
+    except Exception as e:
+        return f"Debug environment check failed: {str(e)}"
+
+# UPDATED system prompt that focuses on displaying the SOAP note content
 system_prompt = """
 You are a SOAP note generation agent that creates comprehensive medical SOAP notes.
 
+Your workflow:
+1. When a user requests a SOAP note, use the handle_user_request function
+2. Display the complete SOAP note text directly to the user
+3. Do NOT show debug information unless there's an error
+4. After successfully showing the SOAP note, transfer back to the root agent
+
+Instructions:
+- Always use synthetic data by default
+- Display the full SOAP note text in a clear, readable format
+- Only show debug information if there are errors that need troubleshooting
+- Keep responses focused on the SOAP note content, not the generation process
+
+Response format for successful generation:
+📋 **SOAP NOTE GENERATED**
+
+[Display the complete SOAP note text here]
+
+---
+✅ SOAP note generated successfully. Transferring back to main menu...
+
+Response format for errors:
+❌ **ERROR GENERATING SOAP NOTE**
+
+[Brief error description and any necessary debug info]
+
 Available functions:
-1. handle_soap_note_request() - Generate SOAP notes (general purpose)
-2. generate_soap_notes_for_patient() - Generate multiple notes for a specific patient
-3. generate_random_soap_notes() - Generate random notes with synthetic data
+1. handle_user_request() - Generate SOAP note text (primary function)
+2. handle_soap_note_request() - Generate SOAP notes in JSON format (legacy)
+3. generate_soap_notes_for_patient() - Generate multiple notes for a specific patient
+4. generate_random_soap_notes() - Generate random notes with synthetic data
+5. debug_environment() - Debug environment issues
 
-When generating SOAP notes:
-- Use the create_synthetic_soap_note function from the model
-- Generate realistic medical content for all SOAP components
-- Include complete patient information and insurance details
-- Return results in JSON format with clear status messages
-
-Always provide helpful responses and handle errors gracefully.
+After displaying results (success or error), always call:
+transfer_to_agent(agent_name='root_patient_intake_agent')
 """
 
 # Create the SOAP note agent
 soap_agent = LlmAgent(
     name="soap_note_agent",
     model="gemini-2.0-flash",
-    description="SOAP note generation agent for creating comprehensive medical notes",
+    description="Generates comprehensive medical SOAP notes with focus on displaying the actual note content",
     instruction=system_prompt,
     output_key="soap_note_result",
-    tools=[handle_soap_note_request, generate_soap_notes_for_patient, generate_random_soap_notes]
+    tools=[handle_user_request, handle_soap_note_request, generate_soap_notes_for_patient, generate_random_soap_notes, debug_environment]
 )
 
 # Export the agent
