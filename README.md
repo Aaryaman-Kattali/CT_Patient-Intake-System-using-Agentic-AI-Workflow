@@ -98,15 +98,43 @@ streamlit run intake_ui.py
 ## 📁 Project Structure
 
 ```
-agentic-ai/
-  ├── main.py                # Main entrypoint, session & pipeline logic
-  ├── app/
-  │   └── intake_ui.py       # Streamlit-based web UI
-  ├── model/
-  │   ├── benefit_check_form.py # Pydantic models for all benefit/intake data
-  │   ├── soap_note.py         # SOAP note and benefit validation models
-  │   └── benefit_check_summary.py # Agent usage example
-  └── ...
+agent
+| - collected_chatbot_data
+| - root_agent
+|    | - subagents
+|    |     | - init.py
+|    |     | - data_collector_agent
+|    |     |    | - agent.py
+|    |     |    | - init.py
+|    |     | - email_agent
+|    |     |    | - agent.py
+|    |     |    | - init.py
+|    |     | - benefit_summary_agent
+|    |     |    | - agent.py
+|    |     |    | - init.py
+|    |     | - soap_note_agent
+|    |     |    | - agent.py
+|    |     |    | - init.py
+|    | - agent.py
+|    | - init.py
+|    | - .env
+| - init.py
+| - .env
+collected_chatbot_data
+model
+| - llm_pydantic.py
+| - session_service.py
+| - benefit_check_form.py
+| - benefit_check_summary.py
+| - soap_note.py
+scripts
+| - tests
+|    | - subagents
+|    |     | - Test-AdkApp.ps1
+|    |     | - Select-Agent.ps1
+app
+| - intake_ui.py
+main.py
 ```
 
 ---
