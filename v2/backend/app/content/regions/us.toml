@@ -1,11 +1,11 @@
 # Fixed crisis text for REGION=US. Written and reviewed by people, never generated.
-# DRAFT: needs owner review before Phase 5.
 region = "US"
 
 [crisis]
-heading = "Help is available now."
+heading = "You can get help now."
 lines = [
     "If you or someone else is in danger now, call 911.",
     "To talk to a crisis counselor now, call or text 988.",
-    "Your answers are saved. You can come back to this form later.",
+    "If phone calls are hard, you can chat online at 988lifeline.org.",
+    "Your answers are saved. You do not need to finish this form now.",
 ]
