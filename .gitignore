@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Local data (never commit intake data)
+*.db
+*.sqlite
+*.sqlite3
+agentic-ai/collected_chatbot_data/
+data/
+
+# V1 generated outputs
+agentic-ai/benefit_summary.txt
+agentic-ai/soap_note.txt
+agentic-ai/synthetic_benefit_check_data.json
+
+# Node / frontend
+node_modules/
+dist/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
