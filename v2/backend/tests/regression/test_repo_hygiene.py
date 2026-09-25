@@ -145,6 +145,29 @@ def test_ci_workflow_runs_tests_and_linters() -> None:
     assert "-m live" not in ci
 
 
+USES_RE = re.compile(r"^\s*(?:-\s*)?uses:\s*(?P<ref>\S+)", re.MULTILINE)
+PINNED_RE = re.compile(r"^[\w.-]+/[\w./-]+@[0-9a-f]{40}$")
+
+
+def test_workflow_actions_pinned_to_commit_sha() -> None:
+    workflows = [
+        *(REPO_ROOT / ".github" / "workflows").glob("*.yml"),
+        *(REPO_ROOT / ".github" / "workflows").glob("*.yaml"),
+    ]
+    refs = [
+        (wf.name, m.group("ref"))
+        for wf in workflows
+        for m in USES_RE.finditer(wf.read_text(encoding="utf-8"))
+    ]
+    assert refs, "no `uses:` lines found; the check would pass vacuously"
+    unpinned = [
+        f"{name}: {ref}"
+        for name, ref in refs
+        if not ref.startswith("./") and not PINNED_RE.match(ref)
+    ]
+    assert unpinned == []
+
+
 # --- Q3 crisis text lives in region files, not code -------------------------
 
 
