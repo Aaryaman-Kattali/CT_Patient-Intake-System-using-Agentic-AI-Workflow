@@ -25,6 +25,9 @@ class Settings(BaseSettings):
     gemini_model: str = Field(default="gemini-3.5-flash-lite", min_length=1)
     # Derives resume codes. Set in .env; at least 32 characters.
     app_secret: SecretStr = Field(min_length=32)
+    # Read by our Settings from .env and passed to the Gemini client explicitly.
+    # Optional: without it, typed replies get a calm "I did not understand" and buttons work.
+    google_api_key: SecretStr | None = None
     synthetic_only: bool = True
     database_url: str = f"sqlite:///{DEFAULT_DB_PATH.as_posix()}"
     email_provider: Literal["console", "smtp"] = "console"
@@ -55,6 +58,7 @@ class Settings(BaseSettings):
 class CrisisContent(BaseModel):
     heading: str
     lines: list[str] = Field(min_length=1)
+    keywords: list[str] = Field(min_length=1)  # checked before any LLM call
 
 
 class RegionContent(BaseModel):

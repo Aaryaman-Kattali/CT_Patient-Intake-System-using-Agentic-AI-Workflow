@@ -61,5 +61,27 @@ class UnderstandingContext(BaseModel):
     answered_field_ids: tuple[str, ...]
 
 
+class LlmCallInfo(BaseModel):
+    """One model call, for the llm_calls table. Never contains prompt or reply text."""
+
+    model_config = ConfigDict(frozen=True)
+
+    model: str
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    latency_ms: int
+    status: Literal["ok", "parse_error", "timeout", "error"]
+    attempts: int = 1
+
+
+class AgentReply(BaseModel):
+    """The agent's proposal (None if it failed) plus call metadata."""
+
+    model_config = ConfigDict(frozen=True)
+
+    understanding: ReplyUnderstanding | None
+    call: LlmCallInfo
+
+
 class Understander(Protocol):
-    def understand(self, message: str, context: UnderstandingContext) -> ReplyUnderstanding: ...
+    def understand(self, message: str, context: UnderstandingContext) -> AgentReply: ...

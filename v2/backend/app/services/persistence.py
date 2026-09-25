@@ -19,6 +19,7 @@ from app.domain.fields import FieldState
 from app.domain.types import FieldStatus, Source
 from app.workflow.snapshot import EventRecord, PendingItem, Snapshot, UndoRecord
 from app.workflow.states import State
+from app.workflow.understanding import LlmCallInfo
 
 
 def _now() -> datetime:
@@ -85,6 +86,24 @@ class EventRow(SQLModel, table=True):
     type: str
     field_id: str | None = None
     payload: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON, nullable=False))
+    created_at: datetime = _ts()
+
+
+class LlmCallRow(SQLModel, table=True):
+    """Model, tokens, latency and reply kind per call. Never prompt or response text."""
+
+    __tablename__ = "llm_calls"
+
+    id: int | None = Field(default=None, primary_key=True)
+    intake_id: UUID = Field(foreign_key="intakes.id", index=True)
+    agent: str
+    model: str
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    latency_ms: int
+    status: str
+    attempts: int = 1
+    reply_kind: str | None = None
     created_at: datetime = _ts()
 
 
@@ -180,6 +199,24 @@ class IntakeRepository:
                 select(EventRow).where(EventRow.intake_id == intake_id).order_by(EventRow.seq)  # type: ignore[arg-type]
             )
             return [EventRecord(type=r.type, field_id=r.field_id, payload=r.payload) for r in rows]
+
+    def record_llm_call(
+        self, intake_id: UUID, agent: str, call: LlmCallInfo, reply_kind: str | None
+    ) -> None:
+        with Session(self._engine) as session, session.begin():
+            session.add(
+                LlmCallRow(
+                    intake_id=intake_id,
+                    agent=agent,
+                    reply_kind=reply_kind,
+                    **call.model_dump(),
+                )
+            )
+
+    def llm_calls(self, intake_id: UUID) -> list[LlmCallRow]:
+        with Session(self._engine) as session:
+            rows = session.exec(select(LlmCallRow).where(LlmCallRow.intake_id == intake_id))
+            return list(rows)
 
     def token_hash(self, intake_id: UUID) -> str | None:
         with Session(self._engine) as session:

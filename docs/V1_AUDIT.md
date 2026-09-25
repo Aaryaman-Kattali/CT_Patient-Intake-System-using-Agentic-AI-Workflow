@@ -36,7 +36,7 @@ Paths below are relative to `agentic-ai/`.
 ### A5: why the session design is worse than "one user per process"
 
 - `app/intake_ui.py` talks to `adk api_server`. That server never runs `main.py`. So the tools write to the global `session` that `model/session_service.py` creates at import. Every Streamlit user shares that one `session.state`. User B's email step can read user A's `client_data`.
-- In current ADK, `create_session` is `async`. An unpinned install gets this version. `main.py:40` and `session_service.py:552` call it without `await`, so `session` would be a coroutine. (The commented-out code at `session_service.py:72` does use `await`. I will confirm this against the installed ADK API in Phase 4.)
+- In current ADK, `create_session` is `async`. An unpinned install gets this version. `main.py:40` and `session_service.py:552` call it without `await`, so `session` would be a coroutine. (The commented-out code at `session_service.py:72` does use `await`. **Confirmed in Phase 5** against the installed google-adk 2.10.0: `InMemorySessionService.create_session` is `async`.)
 - Tools write to a module object, not to ADK's `ToolContext.state`. So ADK's own session never sees the data.
 
 ---

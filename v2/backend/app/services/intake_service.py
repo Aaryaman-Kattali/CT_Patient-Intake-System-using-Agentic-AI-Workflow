@@ -2,6 +2,7 @@
 
 import hashlib
 import hmac
+import logging
 import secrets
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -9,8 +10,13 @@ from datetime import date
 from uuid import UUID, uuid4
 
 from app.config import Settings, load_region_content
+from app.domain import templates as t
+from app.domain.fields import FieldState
 from app.domain.registry import get_field
 from app.domain.requirements import applicable_fields
+from app.guardrails import input as guard_input
+from app.guardrails import output as guard_output
+from app.guardrails import redaction
 from app.services.persistence import IntakeRepository
 from app.services.resume_codes import lookup_hash, resume_code_for
 from app.workflow import commands as c
@@ -35,10 +41,23 @@ from app.workflow.understanding import (
 )
 from app.workflow.view import TurnView, render
 
+log = logging.getLogger(__name__)
+
 
 def hash_secret(secret: str) -> str:
     """For the 256-bit demo session token (not an auth system; see README)."""
     return hashlib.sha256(secret.encode()).hexdigest()
+
+
+@dataclass(frozen=True)
+class _Read:
+    text: str
+    u: ReplyUnderstanding | None
+    events: tuple[EventRecord, ...]
+
+
+def _loggable(state: FieldState) -> set[str]:
+    return {v for v in (state.value, state.display, state.extra_text) if v}
 
 
 @dataclass(frozen=True)
@@ -111,21 +130,90 @@ class IntakeService:
             return TurnResult("not_found", None)
         if snap.turn != expected_turn:  # stale tab or double click: change nothing
             return TurnResult("stale", self._render(snap), "stale_turn")
+        values = {x for state in snap.answers.values() for x in _loggable(state)}
+        token = redaction.CURRENT_VALUES.set(frozenset(values))
+        try:
+            return self._handle(snap, expected_turn, command)
+        finally:
+            redaction.CURRENT_VALUES.reset(token)
+
+    def _handle(self, snap: Snapshot, expected_turn: int, command: c.Command) -> TurnResult:
         understanding: ReplyUnderstanding | None = None
-        if isinstance(command, c.Text) and needs_understanding(snap, command.text):
-            understanding = self._understander.understand(command.text, _context(snap))
-            if understanding.kind is ReplyKind.PAUSE:
+        guard_events: tuple[EventRecord, ...] = ()
+        if isinstance(command, c.Text):
+            redaction.add_values({command.text})
+            read = self._read_text(snap, command.text)
+            if isinstance(read, TurnResult):
+                return read
+            command, understanding, guard_events = c.Text(text=read.text), read.u, read.events
+            if understanding is not None and understanding.kind is ReplyKind.PAUSE:
                 command = c.Pause()
         if isinstance(command, c.Pause):
             code_hash = lookup_hash(self.resume_code(snap.id), self._secret) or ""
             command = c.Pause(resume_code_hash=code_hash)
-        result = handle(snap, command, self._config(), understanding)
+        result = handle(snap, command, self._config(), understanding, guard_events)
         if not isinstance(result, Applied):
+            log.info("turn rejected", extra={"intake_id": str(snap.id), "reason": result.reason})
             return TurnResult("rejected", self._render(snap, result.notes), result.reason)
         if not self._repo.save(result.snapshot, expected_turn, result.events):
-            current = self._repo.load(intake_id)
+            current = self._repo.load(snap.id)
             return TurnResult("stale", self._render(current) if current else None, "stale_turn")
+        log.info(
+            "turn applied",
+            extra={
+                "intake_id": str(snap.id),
+                "command": command.kind,
+                "state": result.snapshot.state.value,
+                "turn": result.snapshot.turn,
+            },
+        )
         return TurnResult("applied", self._render(result.snapshot, result.notes))
+
+    def _read_text(self, snap: Snapshot, raw: str) -> "_Read | TurnResult":
+        """Input guardrails -> (agent) -> output guardrails. Never raises."""
+        crisis = load_region_content(self._settings.region).crisis
+        screened = guard_input.screen(
+            raw, max_chars=self._settings.max_message_chars, crisis_keywords=tuple(crisis.keywords)
+        )
+        if screened.too_long:  # never sent to the LLM
+            notes = Notes(info=[t.MESSAGE_TOO_LONG])
+            return TurnResult("rejected", self._render(snap, notes), "message_too_long")
+        events: list[EventRecord] = []
+        if screened.flags:
+            events.append(
+                EventRecord(type="input_flagged", payload={"flags": sorted(screened.flags)})
+            )
+        if screened.crisis:  # fixed crisis response; the LLM is not asked and cannot lower it
+            events.append(EventRecord(type="crisis_keyword_matched"))
+            crisis_reply = ReplyUnderstanding(kind=ReplyKind.DISTRESS, distress_level="crisis")
+            return _Read(screened.text, crisis_reply, tuple(events))
+        if not needs_understanding(snap, screened.text):
+            return _Read(screened.text, None, tuple(events))
+        context = _context(snap)
+        reply = self._understander.understand(screened.text, context)
+        u = reply.understanding
+        self._repo.record_llm_call(
+            snap.id, "understanding", reply.call, u.kind.value if u else None
+        )
+        log.info(
+            "llm call",
+            extra={
+                "intake_id": str(snap.id),
+                "model": reply.call.model,
+                "status": reply.call.status,
+                "latency_ms": reply.call.latency_ms,
+                "reply_kind": u.kind.value if u else None,
+            },
+        )
+        if u is None:  # parse error, timeout or outage: change nothing, ask again calmly
+            notes = Notes(info=[t.NOT_UNDERSTOOD])
+            return TurnResult("rejected", self._render(snap, notes), "llm_" + reply.call.status)
+        checked = guard_output.check(screened.text, u, context, screened.flags)
+        events += [
+            EventRecord(type="proposal_rejected", field_id=f, payload={"reason": r})
+            for f, r in checked.dropped
+        ]
+        return _Read(screened.text, checked.understanding, tuple(events))
 
 
 def _brief(field_id: str) -> FieldBrief:

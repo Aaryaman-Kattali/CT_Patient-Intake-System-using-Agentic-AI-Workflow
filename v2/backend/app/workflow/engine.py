@@ -26,7 +26,6 @@ from app.domain.parsing import (
 from app.domain.registry import BY_ID, get_field
 from app.domain.requirements import (
     can_mark_unknown,
-    can_submit,
     is_applicable,
     is_needed,
     missing_must_have,
@@ -34,6 +33,8 @@ from app.domain.requirements import (
     not_sure_outcome,
 )
 from app.domain.types import FieldStatus, InputType, Source
+from app.guardrails import policy
+from app.guardrails.policy import Verdict
 from app.workflow import commands as c
 from app.workflow.snapshot import (
     Choice,
@@ -240,8 +241,11 @@ def handle(
     command: c.Command,
     config: EngineConfig,
     understanding: ReplyUnderstanding | None = None,
+    guard_events: tuple[EventRecord, ...] = (),
 ) -> Result:
+    """guard_events: what the input/output guardrails did this turn, kept for the audit."""
     turn = _Turn(snap, config)
+    turn.events.extend(guard_events)
     match command:
         case c.Start():
             return _guarded(turn, Trigger.START, lambda: turn.finish(Trigger.START))
@@ -542,11 +546,17 @@ def _interpret_choice(fld: FieldDef, p: FieldProposal, stated: Source) -> Readin
 
 
 def _apply_main(turn: _Turn, fld: FieldDef, outcome: ParseResult, source: Source) -> None:
-    if isinstance(outcome, Parsed) and source is Source.EXPLICIT:
-        turn.accept(fld, outcome, source, FieldStatus.ACCEPTED)
-    elif isinstance(outcome, Parsed):
-        turn.queue.insert(0, _pending(PendingKind.CONFIRM_VALUE, fld, outcome, Source.INFERRED))
-        turn.event("field_proposed", fld.id, source="inferred")
+    if isinstance(outcome, Parsed):
+        decision = policy.decide(
+            turn.start.state, turn.answers, policy.AcceptValue(fld.id, source, is_extra=False)
+        )
+        if decision.allowed:
+            turn.accept(fld, outcome, source, FieldStatus.ACCEPTED)
+        elif decision.verdict is Verdict.REQUIRE_CONFIRMATION:
+            turn.queue.insert(0, _pending(PendingKind.CONFIRM_VALUE, fld, outcome, source))
+            turn.event("field_proposed", fld.id, source=source.value, reason=decision.reason)
+        else:
+            turn.event("proposal_dropped", fld.id, reason=decision.reason)
     elif isinstance(outcome, Confirm):
         turn.queue.insert(0, _pending(PendingKind.CONFIRM_VALUE, fld, outcome.value, source))
         turn.event("field_proposed", fld.id, source=source.value, reason="one_reading")
@@ -573,6 +583,12 @@ def _apply_extra(turn: _Turn, p: FieldProposal, kind: ReplyKind) -> bool:
     current = turn.answers.get(fld.id)
     if current is not None and current.answered:
         return _extra_for_answered(turn, fld, outcome, source, current, kind)
+    decision = policy.decide(
+        turn.start.state, turn.answers, policy.AcceptValue(fld.id, source, is_extra=True)
+    )
+    if decision.verdict is Verdict.DENY:
+        turn.event("proposal_dropped", fld.id, reason=decision.reason)
+        return False
     if isinstance(outcome, DateChoice):
         turn.queue.append(_date_choice(fld, outcome, source))
     else:
@@ -597,8 +613,15 @@ def _extra_for_answered(
     parsed = outcome.value if isinstance(outcome, Confirm) else outcome
     if not isinstance(parsed, Parsed) or parsed.value == current.value:
         return False
-    quoted = kind is ReplyKind.CORRECTION and source is Source.EXPLICIT
-    if quoted and isinstance(outcome, Parsed):  # Q7: explicit correction, quoted -> save + Undo
+    decision = policy.decide(
+        turn.start.state,
+        turn.answers,
+        policy.ChangeValue(fld.id, source, quoted_correction=kind is ReplyKind.CORRECTION),
+    )
+    if decision.verdict is Verdict.DENY:
+        turn.event("proposal_dropped", fld.id, reason=decision.reason)
+        return False
+    if decision.allowed and isinstance(outcome, Parsed):  # Q7: quoted correction, with Undo
         new = FieldState(
             status=FieldStatus.ACCEPTED,
             value=parsed.value,
@@ -731,7 +754,7 @@ def _mark_unknown(turn: _Turn, field_id: str) -> Result:
 def _submit(turn: _Turn) -> Result:
     if turn.start.state is not State.REVIEW:
         return _reject("not_allowed_in_state")
-    if not can_submit(turn.answers):
+    if not policy.decide(turn.start.state, turn.answers, policy.Submit()).allowed:
         turn.notes.info.append(t.REVIEW_CANNOT_SUBMIT)
         turn.event("submit_blocked", missing=missing_must_have(turn.answers))
         return turn.finish(Trigger.SUBMIT, State.REVIEW)

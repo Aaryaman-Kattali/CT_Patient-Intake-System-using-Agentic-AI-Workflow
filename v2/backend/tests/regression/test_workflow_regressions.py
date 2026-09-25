@@ -117,7 +117,10 @@ def _corrected(tmp_path: Path) -> Driver:
     d.choose("me")
     d.text("Alex Rivera")
     d.text("May 4, 2004")
-    d.text("x", understood(ReplyKind.CORRECTION, ("date_of_birth", "May 14 2004")))
+    d.text(
+        "sorry, it is May 14 2004",
+        understood(ReplyKind.CORRECTION, ("date_of_birth", "May 14 2004")),
+    )
     return d
 
 
@@ -148,9 +151,8 @@ def test_undo_without_correction_is_rejected(tmp_path: Path) -> None:
 def test_correction_requires_quoted_value(tmp_path: Path) -> None:
     d = _corrected(tmp_path)
     d.send(c.Undo())
-    view = d.text(
-        "x", understood(ReplyKind.CORRECTION, ("date_of_birth", "June 4 2004", "inferred"))
-    )
+    u = understood(ReplyKind.CORRECTION, ("date_of_birth", "June 4 2004", "inferred"))
+    view = d.text("maybe June 4 2004", u)
     assert view.question is not None
     assert view.question.kind == "conflict"  # never a silent overwrite
 
