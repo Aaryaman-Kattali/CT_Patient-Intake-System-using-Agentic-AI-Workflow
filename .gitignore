@@ -35,3 +35,6 @@ dist/
 Thumbs.db
 .vscode/
 .idea/
+
+# V2 local runtime data
+v2/backend/var/
