@@ -107,7 +107,10 @@ def test_extra_value_is_confirmed_not_silently_accepted(d: Driver) -> None:
 
 def test_rejected_extra_is_asked_normally_later(d: Driver) -> None:
     _to(d, "full_name")
-    d.text("x", understood(A, ("full_name", "Alex Rivera"), ("date_of_birth", "May 4 2004")))
+    d.text(
+        "Alex Rivera, May 4 2004",
+        understood(A, ("full_name", "Alex Rivera"), ("date_of_birth", "May 4 2004")),
+    )
     view = d.choose("no")
     assert view.question is not None
     assert view.question.field_id == "date_of_birth"
@@ -132,7 +135,9 @@ def test_extra_for_family_only_field_dropped_for_referral(d: Driver) -> None:
     view = d.text("Sam Park, it is for me", u)
     assert view.question is not None
     assert view.question.kind == "field"
-    assert any(e.type == "proposal_dropped" for e in d.events())
+    rejected = [e for e in d.events() if e.type == "proposal_rejected"]
+    assert rejected[0].field_id == "relationship"
+    assert rejected[0].payload == {"reason": "unknown_field"}
 
 
 def test_hallucinated_value_is_not_saved(d: Driver) -> None:
@@ -178,7 +183,7 @@ def test_unannounced_new_value_asks_which_is_correct(d: Driver) -> None:
 def test_inferred_change_goes_to_conflict_even_when_marked_correction(d: Driver) -> None:
     _answered_dob(d)
     u = understood(ReplyKind.CORRECTION, ("date_of_birth", "June 4 2004", "inferred"))
-    view = d.text("it was the June one", u)
+    view = d.text("it was June 4 2004 I think", u)
     assert view.question is not None
     assert view.question.kind == "conflict"
 
@@ -201,7 +206,10 @@ def test_later_change_clears_unresolved_conflict(d: Driver) -> None:
     _answered_dob(d)
     d.text("June 4 2004", understood(A, ("date_of_birth", "June 4 2004")))
     d.choose("not_sure")
-    d.text("x", understood(ReplyKind.CORRECTION, ("date_of_birth", "May 14 2004")))
+    d.text(
+        "sorry, it is May 14 2004",
+        understood(ReplyKind.CORRECTION, ("date_of_birth", "May 14 2004")),
+    )
     snap = d.service._repo.load(d.id)
     assert snap is not None
     assert snap.answers["date_of_birth"].unresolved_other is None
@@ -393,7 +401,8 @@ def test_buttons_and_typed_yes_no_never_call_the_llm(d: Driver) -> None:
     d.choose(FI)
     d.choose("me")
     d.text(
-        "Alex Rivera", understood(A, ("full_name", "Alex Rivera"), ("date_of_birth", "May 4 2004"))
+        "Alex Rivera, May 4 2004",
+        understood(A, ("full_name", "Alex Rivera"), ("date_of_birth", "May 4 2004")),
     )
     calls_before = len(d.fake.calls)
     view = d.text("yes")  # typed yes/no is matched deterministically

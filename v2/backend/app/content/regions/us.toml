@@ -9,3 +9,26 @@ lines = [
     "If phone calls are hard, you can chat online at 988lifeline.org.",
     "Your answers are saved. You do not need to finish this form now.",
 ]
+# Words that always trigger the crisis response, before and regardless of the LLM.
+# Matching is case-insensitive substring matching on the normalized message.
+keywords = [
+    "kill myself",
+    "killing myself",
+    "suicide",
+    "suicidal",
+    "end my life",
+    "want to die",
+    "wanna die",
+    "better off dead",
+    "hurt myself",
+    "hurting myself",
+    "self harm",
+    "self-harm",
+    "cut myself",
+    "overdose",
+    "no reason to live",
+    "don't want to be alive",
+    "do not want to be alive",
+    "not safe at home",
+    "going to hurt someone",
+]

@@ -169,7 +169,15 @@ A single turn goes like this:
 | Transport | Plain REST. SSE only if a concrete need appears. |
 | Observability | stdlib `logging` with a small JSON formatter and a PII-redaction filter, plus the `llm_calls` table. OpenTelemetry is optional, last. |
 
-**ADK note:** before writing agent code (Phase 4), I will read the installed ADK version's API. Specifically I will check how `LlmAgent(output_schema=...)` passes the schema to Gemini, the `Runner`/session API, and whether `create_session` is async. If ADK does not give reliable schema-constrained output, the understanding agent will call `google-genai` directly with `response_schema`, and ADK will stay only as the agent wrapper. I will report this, not decide it silently.
+**ADK findings (Phase 5, checked against the installed google-adk 2.10.0 / google-genai 2.25.0):**
+- `LlmAgent(output_schema=...)` with **no tools** passes the schema to Gemini as native structured output (`llm_request.set_output_schema`). So the understanding agent is a plain ADK agent; no direct `google-genai` fallback was needed.
+- The agent: `include_contents="none"` (no history), no tools, no sub-agents, transfers disallowed, no `output_key`, temperature 0. Each call uses a fresh ADK session that is deleted afterwards.
+- `InMemorySessionService.create_session` is `async` (with a separate `create_session_sync`). This confirms audit item A5: V1 calls it without `await`.
+- `google-genai` reads `GOOGLE_API_KEY` (then `GEMINI_API_KEY`) from the **process environment**. Our settings read `.env` into the `Settings` object only, so the key is passed to the client explicitly: `Gemini(model=GEMINI_MODEL, client_kwargs={"api_key": ...})`. Nothing is written to `os.environ`.
+- One retry on a parse error or timeout; then the turn changes nothing and shows "I did not understand. Here is the question again."
+- Offline tests plug a scripted `BaseLlm` into the real `LlmAgent` + `Runner`, so the ADK wiring is tested without a network or a key.
+
+**Original ADK note:** before writing agent code (Phase 4), I will read the installed ADK version's API. Specifically I will check how `LlmAgent(output_schema=...)` passes the schema to Gemini, the `Runner`/session API, and whether `create_session` is async. If ADK does not give reliable schema-constrained output, the understanding agent will call `google-genai` directly with `response_schema`, and ADK will stay only as the agent wrapper. I will report this, not decide it silently.
 
 ### 4.3 Repository layout
 
@@ -425,7 +433,7 @@ Showing the same pending question again after a clarification or off-topic reply
 
 ### 6.5 Distress and crisis: deterministic backstop
 
-A fixed keyword/regex list for crisis language runs **before** the LLM. If it matches, the crisis response is shown whatever the LLM says. The LLM can raise the level (e.g. detect overwhelm) but can never lower a keyword match. Overwhelm text is written by us and stored in `templates.py`. Crisis and emergency text (911, 988 for `REGION=US`) is stored only in the per-region file `app/content/regions/<region>.toml` (§12, Q3).
+A fixed keyword/regex list for crisis language runs **before** the LLM. If it matches, the crisis response is shown whatever the LLM says. The LLM can raise the level (e.g. detect overwhelm) but can never lower a keyword match. Overwhelm text is written by us and stored in `templates.py`. Crisis and emergency text (911, 988 for `REGION=US`) **and the crisis keyword list** are stored only in the per-region file `app/content/regions/<region>.toml` (§12, Q3). A keyword match skips the LLM call entirely.
 
 ### 6.6 Button replies bypass the LLM
 
@@ -496,7 +504,7 @@ Every write for one turn happens in **one transaction**. So a saved answer and i
 | `field_values` | (`intake_id`, `field_id`) unique · `value` · `display_value` · `status` (accepted/confirmed/skipped/deferred/dont_know/unknown_confirmed) · `source` (explicit/inferred/button) · `attempts` · `updated_at` | Current value per field. |
 | `pending_items` | `id` · `intake_id` · `seq` · `kind` (extra/conflict/date_choice) · `field_id` · `payload` JSON | The FIFO queue behind CONFIRMING_EXTRA / RESOLVING_CONFLICT. |
 | `intake_events` | `id` · `intake_id` · `seq` (per intake, unique) · `type` · `field_id` · `payload` JSON · `created_at` | **Append-only.** Types: `created`, `question_shown`, `field_proposed`, `field_accepted`, `field_confirmed`, `field_rejected`, `field_corrected`, `conflict_detected`, `conflict_resolved`, `field_skipped`, `field_deferred`, `field_marked_unknown`, `conflict_unresolved`, `paused`, `resumed`, `distress_shown`, `needs_human`, `unsafe_blocked`, `submitted`, `email_sent`, `email_denied`, `staff_summary_generated`, `benefit_demo_generated`. |
-| `llm_calls` | `id` · `intake_id` · `agent` · `model` · `input_tokens` · `output_tokens` · `latency_ms` · `reply_kind` · `status` (ok/parse_error/timeout/rejected) · `created_at` | **No prompt or response text** by default. |
+| `llm_calls` | `id` · `intake_id` · `agent` · `model` · `input_tokens` · `output_tokens` · `latency_ms` · `reply_kind` · `status` (ok/parse_error/timeout/error) · `attempts` · `created_at` | **No prompt or response text**, ever. |
 | `email_sends` | `id` · `intake_id` · `idempotency_key` (unique) · `status` · `provider` · `created_at` | Idempotency and audit. The recipient is not stored here. It is always re-read from `field_values`. |
 | `staff_outputs` | `id` · `intake_id` · `kind` (staff_summary/benefit_demo) · `content` JSON · `created_at` | Generated drafts. |
 
@@ -599,7 +607,7 @@ A logging filter replaces:
 - every value known for the current intake (passed via a context variable), and
 - generic patterns: emails, phone-like numbers, dates
 
-with `[REDACTED]`. Logs carry ids, field ids, states and event types only. Exceptions are logged with a redacted message. Users see fixed text only (audit B10).
+with `[REDACTED]`. Logs carry ids, field ids, states and event types only. **Limit:** outside a turn (no intake in context) only the generic patterns apply, so a person's name logged there would not be recognized. That is why the rule is "log ids only"; redaction is the safety net (`test_outside_a_turn_only_patterns_are_masked` documents this). Exceptions are logged with a redacted message. Users see fixed text only (audit B10).
 
 ---
 
@@ -653,7 +661,7 @@ class StaffSummary(BaseModel):
 |---|---|---|
 | `GEMINI_MODEL` | `gemini-3.5-flash-lite` | Required to be set. There is no literal anywhere else. |
 | `APP_SECRET` | – | **Required**, at least 32 characters, from `.env`. Derives resume codes (§8). Tests generate a random one per session. |
-| API key | – | Added in Phase 5, using the exact variable name the installed `google-genai`/ADK read. `.env.example` (empty value) is committed, `.env` is gitignored, and the owner creates `.env`. Unit, workflow and API tests never need the key. |
+| `GOOGLE_API_KEY` | – | Optional. In `v2/backend/.env`, read by `Settings` and passed to the Gemini client explicitly. Without it, buttons work and typed replies get the calm "did not understand" message. `.env.example` (empty values) is committed; `.env` is gitignored; the owner creates `.env`. Only `pytest -m live` reads `.env`. |
 | `SYNTHETIC_ONLY` | `true` | Validator: must be `true`, or startup fails. |
 | `DATABASE_URL` | `sqlite:///var/intake.db` | Relative to backend dir, gitignored. |
 | `EMAIL_PROVIDER` | `console` | `console` / `smtp` |

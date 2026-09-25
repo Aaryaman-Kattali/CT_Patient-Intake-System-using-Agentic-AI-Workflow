@@ -29,6 +29,7 @@ def _test_app_secret(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
-def _ignore_local_env_file(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Settings must not pick up a developer's local .env during tests."""
-    monkeypatch.setitem(Settings.model_config, "env_file", None)
+def _ignore_local_env_file(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Settings must not pick up a developer's local .env, except in opt-in live tests."""
+    if request.node.get_closest_marker("live") is None:
+        monkeypatch.setitem(Settings.model_config, "env_file", None)
