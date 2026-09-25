@@ -70,8 +70,7 @@ SENTENCES = [
 ]
 
 COMPOSED_QUESTIONS = [
-    *(t.CONFIRM_VALUE.format(label=f.label_self, value="Sample value") for f in FIELDS),
-    *(t.CONFIRM_VALUE.format(label=f.label_other, value="Sample value") for f in FIELDS),
+    *(t.CONFIRM_VALUE.format(label=f.short_label.capitalize(), value="Sample") for f in FIELDS),
     " ".join([t.CONFLICT_EARLIER, t.CONFLICT_NOW, t.CONFLICT_QUESTION]).format(**SAMPLE),
     t.DATE_CHOICE,
 ]
@@ -108,6 +107,15 @@ def test_fixed_sentences_are_plain(sentence: str) -> None:
     assert "?" not in sentence
     assert _grade(sentence) <= MAX_GRADE
     assert not BANNED.search(sentence)
+
+
+# Why/help text must not make absolute promises the clinic might not keep.
+PROMISES = re.compile(r"\b(only|never|always|guarantee\w*)\b", re.IGNORECASE)
+
+
+@pytest.mark.parametrize("text", [s for f in FIELDS for s in (f.why, f.help)])
+def test_why_and_help_make_no_absolute_promises(text: str) -> None:
+    assert not PROMISES.search(text)
 
 
 @pytest.mark.parametrize("label", LABELS)

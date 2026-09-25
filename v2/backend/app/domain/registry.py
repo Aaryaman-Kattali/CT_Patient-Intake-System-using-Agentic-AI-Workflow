@@ -20,8 +20,9 @@ IS_PR = Condition(field_id="intake_type", equals=PR)
 RESPONDENT_NOT_PATIENT = Condition(field_id="relationship", not_equals="me")
 
 INTAKE_TYPE_HELP = (
-    "Choose the first one if you want care for yourself or someone you look after. "
-    "Choose the second one if you are a health worker sending a patient to us."
+    "If you are a health worker sending a patient to us, "
+    'choose "I am a health worker sending a referral". '
+    'If not, choose "Care for me or someone I look after".'
 )
 
 FIELDS: tuple[FieldDef, ...] = (
@@ -37,7 +38,7 @@ FIELDS: tuple[FieldDef, ...] = (
         label_self="the kind of form",
         label_other="the kind of form",
         short_label="kind of form",
-        why="We ask this so we only ask questions that fit you.",
+        why="We ask this so the questions fit you.",
         help=INTAKE_TYPE_HELP,
         options=(
             Option(id=FI, label="Care for me or someone I look after"),
@@ -105,8 +106,8 @@ FIELDS: tuple[FieldDef, ...] = (
         label_self="your full name",
         label_other="the patient's full name",
         short_label="full name",
-        why="We use this name to make a new record at the clinic.",
-        help="Type the first name and the last name.",
+        why="We use this to make sure we have the right person.",
+        help="Type the first name and the last name. If the person has one name, type that.",
         example="Alex Rivera",
     ),
     FieldDef(
@@ -120,7 +121,7 @@ FIELDS: tuple[FieldDef, ...] = (
         label_self="your date of birth",
         label_other="the patient's date of birth",
         short_label="date of birth",
-        why="We use the date of birth to find the right record.",
+        why="This helps us make sure we have the right person.",
         help="Type the month, the day and the year.",
         example="May 4, 2004",
     ),
@@ -136,8 +137,8 @@ FIELDS: tuple[FieldDef, ...] = (
         label_self="how you want us to contact you",
         label_other="how you want us to contact you",
         short_label="how to contact you",
-        why="We will only contact you in the way you choose.",
-        help="Choose how we should reach you when we have news about this form.",
+        why="We will use the way you choose to contact you.",
+        help="Choose how you want us to contact you about this form.",
         options=(
             Option(id="phone_call", label="Phone call"),
             Option(id="text_message", label="Text message"),
@@ -160,7 +161,7 @@ FIELDS: tuple[FieldDef, ...] = (
         label_self="your phone number",
         label_other="the patient's phone number",
         short_label="phone number",
-        why="We use this number only to talk about this form.",
+        why="We use this to contact you about this form.",
         help="Type the phone number with the area code.",
         example="202-555-0100",
         about_respondent_in=frozenset({FI}),
@@ -176,7 +177,7 @@ FIELDS: tuple[FieldDef, ...] = (
         label_self="your email address",
         label_other="the patient's email address",
         short_label="email address",
-        why="We use this email only to send messages about this form.",
+        why="We use this to send you messages about this form.",
         help="Type the email address. It has an @ sign in it.",
         example="alex@example.com",
         about_respondent_in=frozenset({FI}),
@@ -192,7 +193,7 @@ FIELDS: tuple[FieldDef, ...] = (
         label_self="your home address",
         label_other="the patient's home address",
         short_label="home address",
-        why="We use this address only to send letters about this form.",
+        why="We use this to send you letters about this form.",
         help="Type the street, the town, the state and the ZIP code.",
         example="12 Oak Street, Springfield, IL 62701",
         about_respondent_in=frozenset({FI}),
@@ -209,7 +210,7 @@ FIELDS: tuple[FieldDef, ...] = (
         label_other="what the patient needs help with",
         short_label="help asked for",
         why="This helps us send your form to the right team.",
-        help="A few words is enough.",
+        help="Choose one. If none fit, choose Something else and type a few words.",
         options=(
             Option(id="autism_assessment", label="An autism assessment"),
             Option(id="therapy_support", label="Therapy or support"),
@@ -232,7 +233,7 @@ FIELDS: tuple[FieldDef, ...] = (
         label_self="the name of the provider",
         label_other="the name of the provider",
         short_label="referring provider",
-        why="We may need to talk to the provider about this referral.",
+        why="We may need to contact them about this referral.",
         help="Type the name of the doctor or other provider.",
         example="Dr. Sam Lee",
         conditions=(IS_PR,),
@@ -289,7 +290,7 @@ FIELDS: tuple[FieldDef, ...] = (
         label_self="how the referral was sent",
         label_other="how the referral was sent",
         short_label="how it was sent",
-        why="This helps us find the first copy of the referral.",
+        why="This helps us find the referral we received.",
         help="Choose how the referral reached us.",
         options=(
             Option(id="fax", label="Fax"),

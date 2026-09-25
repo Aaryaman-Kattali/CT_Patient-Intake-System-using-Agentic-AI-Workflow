@@ -28,6 +28,15 @@ def test_region_must_be_two_letter_code(monkeypatch: pytest.MonkeyPatch) -> None
         Settings()
 
 
+def test_app_secret_is_required_and_long(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("APP_SECRET")
+    with pytest.raises(ValidationError, match="app_secret"):
+        Settings()
+    monkeypatch.setenv("APP_SECRET", "short")
+    with pytest.raises(ValidationError, match="at least 32"):
+        Settings()
+
+
 def test_settings_do_not_require_api_key() -> None:
     Settings()  # would raise if a key were mandatory; conftest removed all key vars
 

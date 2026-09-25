@@ -1,3 +1,4 @@
+import secrets
 from pathlib import Path
 
 import pytest
@@ -17,6 +18,14 @@ def _no_api_key(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch)
     if request.node.get_closest_marker("live") is None:
         for var in API_KEY_VARS:
             monkeypatch.delenv(var, raising=False)
+
+
+TEST_APP_SECRET = secrets.token_hex(32)  # random per test session
+
+
+@pytest.fixture(autouse=True)
+def _test_app_secret(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("APP_SECRET", TEST_APP_SECRET)
 
 
 @pytest.fixture(autouse=True)

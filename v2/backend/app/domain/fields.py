@@ -5,7 +5,7 @@ from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
-from app.domain.types import ANSWERED, FieldStatus, InputType, IntakeType, NotSure, Tier
+from app.domain.types import ANSWERED, FieldStatus, InputType, IntakeType, NotSure, Source, Tier
 
 NOT_SURE_ID = "not_sure"
 PREFER_NOT_ID = "prefer_not"
@@ -81,7 +81,12 @@ class FieldState(BaseModel):
 
     status: FieldStatus
     value: str | None = None
+    display: str | None = None  # how the value is shown back ("May 4, 2004")
     extra_text: str | None = None  # typed text for a free_text option
+    source: Source | None = None
+    # The other answer from a conflict the user could not settle ("I'm not sure").
+    # Cleared automatically by any later change, because the whole state is replaced.
+    unresolved_other: str | None = None
 
     @property
     def answered(self) -> bool:
