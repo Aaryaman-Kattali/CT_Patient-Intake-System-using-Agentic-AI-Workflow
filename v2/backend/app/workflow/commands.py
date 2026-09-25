@@ -34,8 +34,7 @@ class Skip(_Command):
 
 class Pause(_Command):
     kind: Literal["pause"] = "pause"
-    resume_code: str = ""  # filled in by the service, shown once
-    resume_code_hash: str = ""
+    resume_code_hash: str = ""  # filled in by the service
 
 
 class Resume(_Command):

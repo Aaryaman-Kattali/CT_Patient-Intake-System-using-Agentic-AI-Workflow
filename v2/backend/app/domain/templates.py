@@ -48,8 +48,8 @@ START = (
 )
 PAUSED = (
     "Your answers are saved.",
-    "To come back, open this page again.",
-    "You can also use this code: {code}",
+    "To come back, open this page again or use this code.",
+    "Write this code down.",
 )
 WELCOME_BACK = "Welcome back."
 WELCOME_BACK_NAME = "Welcome back, {name}."
@@ -83,6 +83,7 @@ BUTTONS: MappingProxyType[str, str] = MappingProxyType(
         "yes": "Yes",
         "no": "No",
         "neither": "Neither",
+        "not_sure": "I'm not sure",
         "undo": "Undo",
         "skip": "Skip",
         "answer_later": "Answer later",

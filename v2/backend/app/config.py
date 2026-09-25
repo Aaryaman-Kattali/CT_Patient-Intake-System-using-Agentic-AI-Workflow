@@ -5,7 +5,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
@@ -23,6 +23,8 @@ class Settings(BaseSettings):
     )
 
     gemini_model: str = Field(default="gemini-3.5-flash-lite", min_length=1)
+    # Derives resume codes. Set in .env; at least 32 characters.
+    app_secret: SecretStr = Field(min_length=32)
     synthetic_only: bool = True
     database_url: str = f"sqlite:///{DEFAULT_DB_PATH.as_posix()}"
     email_provider: Literal["console", "smtp"] = "console"

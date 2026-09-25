@@ -12,11 +12,13 @@ from app.config import Settings, load_region_content
 from app.domain.registry import get_field
 from app.domain.requirements import applicable_fields
 from app.services.persistence import IntakeRepository
+from app.services.resume_codes import lookup_hash, resume_code_for
 from app.workflow import commands as c
 from app.workflow.engine import (
     Applied,
     EngineConfig,
     FieldQuestion,
+    Notes,
     QueueQuestion,
     current_question,
     handle,
@@ -33,21 +35,10 @@ from app.workflow.understanding import (
 )
 from app.workflow.view import TurnView, render
 
-_CODE_ALPHABET = "ABCDEFGHJKMNPQRSTVWXYZ23456789"  # no 0/O, 1/I/L, U/V confusion
-
 
 def hash_secret(secret: str) -> str:
-    """Demo-grade hashing for tokens and resume codes (not an auth system; see README)."""
+    """For the 256-bit demo session token (not an auth system; see README)."""
     return hashlib.sha256(secret.encode()).hexdigest()
-
-
-def new_resume_code() -> tuple[str, str]:
-    raw = "".join(secrets.choice(_CODE_ALPHABET) for _ in range(8))
-    return f"{raw[:4]} {raw[4:]}", hash_secret(raw)
-
-
-def normalize_resume_code(code: str) -> str:
-    return "".join(ch for ch in code.upper() if ch.isalnum())
 
 
 @dataclass(frozen=True)
@@ -96,37 +87,45 @@ class IntakeService:
         return stored is not None and hmac.compare_digest(stored, hash_secret(token))
 
     def find_by_resume_code(self, code: str) -> UUID | None:
-        return self._repo.find_by_resume_code_hash(hash_secret(normalize_resume_code(code)))
+        code_hash = lookup_hash(code, self._secret)
+        return self._repo.find_by_resume_code_hash(code_hash) if code_hash else None
+
+    def resume_code(self, intake_id: UUID) -> str:
+        return resume_code_for(intake_id, self._secret)
 
     def view(self, intake_id: UUID) -> TurnView | None:
         snap = self._repo.load(intake_id)
-        return render(snap) if snap else None
+        return self._render(snap) if snap else None
+
+    def _render(self, snap: Snapshot, notes: Notes | None = None) -> TurnView:
+        code = self.resume_code(snap.id) if snap.state is State.PAUSED else None
+        return render(snap, notes, resume_code=code)
+
+    @property
+    def _secret(self) -> bytes:
+        return self._settings.app_secret.get_secret_value().encode()
 
     def handle(self, intake_id: UUID, expected_turn: int, command: c.Command) -> TurnResult:
         snap = self._repo.load(intake_id)
         if snap is None:
             return TurnResult("not_found", None)
         if snap.turn != expected_turn:  # stale tab or double click: change nothing
-            return TurnResult("stale", render(snap), "stale_turn")
+            return TurnResult("stale", self._render(snap), "stale_turn")
         understanding: ReplyUnderstanding | None = None
         if isinstance(command, c.Text) and needs_understanding(snap, command.text):
             understanding = self._understander.understand(command.text, _context(snap))
             if understanding.kind is ReplyKind.PAUSE:
-                command = self._pause_command()
-        if isinstance(command, c.Pause) and not command.resume_code:
-            command = self._pause_command()
+                command = c.Pause()
+        if isinstance(command, c.Pause):
+            code_hash = lookup_hash(self.resume_code(snap.id), self._secret) or ""
+            command = c.Pause(resume_code_hash=code_hash)
         result = handle(snap, command, self._config(), understanding)
         if not isinstance(result, Applied):
-            return TurnResult("rejected", render(snap, result.notes), result.reason)
+            return TurnResult("rejected", self._render(snap, result.notes), result.reason)
         if not self._repo.save(result.snapshot, expected_turn, result.events):
             current = self._repo.load(intake_id)
-            return TurnResult("stale", render(current) if current else None, "stale_turn")
-        return TurnResult("applied", render(result.snapshot, result.notes))
-
-    @staticmethod
-    def _pause_command() -> c.Pause:
-        display, code_hash = new_resume_code()
-        return c.Pause(resume_code=display, resume_code_hash=code_hash)
+            return TurnResult("stale", self._render(current) if current else None, "stale_turn")
+        return TurnResult("applied", self._render(result.snapshot, result.notes))
 
 
 def _brief(field_id: str) -> FieldBrief:

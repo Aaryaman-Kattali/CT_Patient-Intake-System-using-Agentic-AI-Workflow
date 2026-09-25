@@ -345,9 +345,15 @@ def _resolve_queue(turn: _Turn, item: PendingItem, choice: str) -> Result:
 
 
 def _resolve_conflict(turn: _Turn, item: PendingItem, fld: FieldDef, choice: str) -> Result:
-    if choice not in ("old", "new", "neither"):
+    if choice not in ("old", "new", "neither", "not_sure"):
         return _reject("choose_a_value", t.RETRY["choose_option"])
     turn.queue.pop(0)
+    if choice == "not_sure":  # keep the earlier value, but flag both for staff
+        current = turn.answers[fld.id]
+        turn.answers[fld.id] = current.model_copy(update={"unresolved_other": item.display})
+        turn.event("conflict_unresolved", fld.id, kept=current.display, other=item.display)
+        turn.notes.acknowledgement = t.NOT_SURE_OK
+        return turn.finish(Trigger.ANSWER)
     turn.event("conflict_resolved", fld.id, kept=choice)
     if choice == "new":
         new = FieldState(
@@ -455,8 +461,8 @@ def _dont_know_or_skip(turn: _Turn, q: CurrentQuestion | None, kind: ReplyKind) 
             return _skip(turn)
         return _not_sure(turn, q.field)
     if isinstance(q, QueueQuestion):
-        if q.item.kind is PendingKind.CONFLICT:  # unsure which: keep the earlier value
-            return _resolve_queue(turn, q.item, "old")
+        if q.item.kind is PendingKind.CONFLICT:  # unsure which: keep earlier, flag both
+            return _resolve_queue(turn, q.item, "not_sure")
         if q.item.kind in (PendingKind.CONFIRM_EXTRA, PendingKind.CONFIRM_VALUE):
             return _resolve_queue(turn, q.item, "no")
     turn.notes.info.append(t.NOT_UNDERSTOOD)
@@ -643,8 +649,8 @@ def _pause(turn: _Turn, cmd: c.Pause) -> Result:
         return _reject("not_allowed_in_state")
     turn.resume_state = turn.start.state
     turn.interruption = None
-    turn.resume_code_hash = cmd.resume_code_hash or turn.resume_code_hash
-    turn.notes.info += [line.format(code=cmd.resume_code) for line in t.PAUSED]
+    turn.resume_code_hash = turn.resume_code_hash or cmd.resume_code_hash
+    turn.notes.info += list(t.PAUSED)
     turn.event("paused")
     return turn.finish(Trigger.PAUSE, State.PAUSED)
 

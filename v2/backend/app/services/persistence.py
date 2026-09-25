@@ -60,6 +60,7 @@ class FieldValueRow(SQLModel, table=True):
     display: str | None = None
     extra_text: str | None = None
     source: str | None = None
+    unresolved_other: str | None = None
     updated_at: datetime = _ts()
 
 
@@ -231,6 +232,7 @@ class IntakeRepository:
             row.status = state.status.value
             row.value, row.display, row.extra_text = state.value, state.display, state.extra_text
             row.source = state.source.value if state.source else None
+            row.unresolved_other = state.unresolved_other
             row.updated_at = _now()
             session.add(row)
 
@@ -265,4 +267,5 @@ def _field_state(row: FieldValueRow) -> FieldState:
         display=row.display,
         extra_text=row.extra_text,
         source=Source(row.source) if row.source else None,
+        unresolved_other=row.unresolved_other,
     )

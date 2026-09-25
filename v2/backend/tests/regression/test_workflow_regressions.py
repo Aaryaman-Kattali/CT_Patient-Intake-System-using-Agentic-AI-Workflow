@@ -1,6 +1,7 @@
 """Named regression tests for audit items #2-#5, B11 and the Phase 4 requirements."""
 
 import inspect
+import re
 from pathlib import Path
 from uuid import UUID
 
@@ -13,6 +14,7 @@ from sqlalchemy.exc import IntegrityError, OperationalError
 from app.config import Settings
 from app.services import persistence
 from app.services.persistence import IntakeRepository
+from app.services.resume_codes import ALPHABET, lookup_hash
 from app.workflow import commands as c
 from app.workflow.metrics import repeated_questions
 from app.workflow.snapshot import Snapshot
@@ -224,6 +226,45 @@ def test_intake_ids_are_uuid4(tmp_path: Path) -> None:
     assert all(isinstance(i, UUID) and i.version == 4 for i in ids)
 
 
+def test_resume_code_stable_across_pauses(tmp_path: Path) -> None:
+    d = Driver(make_service(tmp_path / "intake.db"))
+    d.send(c.Start())
+    first = d.send(c.Pause()).resume_code
+    d.send(c.Resume())
+    d.choose("family_inquiry")
+    second = d.send(c.Pause()).resume_code
+    assert first is not None
+    assert first == second
+    assert d.refresh().resume_code == first  # shown again on reload while paused
+    assert d.service.find_by_resume_code(first) == d.id
+
+
+def test_resume_code_alphabet_has_no_lookalikes(tmp_path: Path) -> None:
+    assert not set("0O1IL") & set(ALPHABET)
+    service = make_service(tmp_path / "intake.db")
+    codes = [service.resume_code(service.create().intake_id) for _ in range(20)]
+    assert all(re.fullmatch(r"[A-Z2-9]{3}-[A-Z2-9]{3}", code) for code in codes)
+    assert all(ch in ALPHABET for code in codes for ch in code.replace("-", ""))
+    assert len(set(codes)) == 20
+
+
+def test_resume_code_is_stored_only_as_scrypt_hash(tmp_path: Path) -> None:
+    d = Driver(make_service(tmp_path / "intake.db"))
+    d.send(c.Start())
+    code = d.send(c.Pause()).resume_code
+    assert code is not None
+    snap = d.service._repo.load(d.id)
+    assert snap is not None
+    assert snap.resume_code_hash is not None
+    assert code.replace("-", "") not in snap.resume_code_hash
+    assert len(snap.resume_code_hash) == 64
+
+
+def test_resume_code_rejects_malformed_input_without_hashing() -> None:
+    assert lookup_hash("0O1-IL0", b"x" * 32) is None
+    assert lookup_hash("AB", b"x" * 32) is None
+
+
 def test_token_and_resume_code_are_stored_hashed(tmp_path: Path) -> None:
     service = make_service(tmp_path / "intake.db")
     created = service.create()
@@ -320,7 +361,7 @@ def _act(h: EngineHarness, action: str, field_id: str, kind: str, book: dict[str
         case "why":
             h.send(c.Text(text="why"), understood(ReplyKind.CLARIFICATION, clarification="why"))
         case "pause":
-            h.send(c.Pause(resume_code="ABCD 2345", resume_code_hash="h"))
+            h.send(c.Pause(resume_code_hash="h"))
         case "overwhelmed":
             h.send(c.Text(text="..."), understood(ReplyKind.DISTRESS, distress_level="overwhelmed"))
         case "extra" if value is not None:

@@ -89,6 +89,7 @@ class TurnView(_View):
     actions: tuple[ActionView, ...]
     progress: ProgressView
     review: ReviewView | None
+    resume_code: str | None = None  # shown while paused, with a copy button
 
 
 def _action(action_id: str) -> ActionView:
@@ -133,6 +134,7 @@ def _queue_question(snap: Snapshot, q: QueueQuestion) -> QuestionView:
             OptionView(id="old", label=item.old_display or ""),
             OptionView(id="new", label=item.display or ""),
             OptionView(id="neither", label=t.BUTTONS["neither"]),
+            OptionView(id="not_sure", label=t.BUTTONS["not_sure"]),
         )
     elif item.kind is PendingKind.DATE_CHOICE:
         text = t.DATE_CHOICE
@@ -209,7 +211,7 @@ def _actions(snap: Snapshot, notes: Notes) -> tuple[ActionView, ...]:
     return tuple(_action(i) for i in dict.fromkeys(ids))
 
 
-def render(snap: Snapshot, notes: Notes | None = None) -> TurnView:
+def render(snap: Snapshot, notes: Notes | None = None, resume_code: str | None = None) -> TurnView:
     notes = notes or Notes()
     info = list(notes.info)
     if snap.state is State.GREETING and not info:
@@ -223,4 +225,5 @@ def render(snap: Snapshot, notes: Notes | None = None) -> TurnView:
         actions=_actions(snap, notes),
         progress=_progress(snap),
         review=_review(snap) if snap.state is State.REVIEW else None,
+        resume_code=resume_code if snap.state is State.PAUSED else None,
     )

@@ -84,7 +84,7 @@ def test_intake_type_not_sure_shows_explanation_then_same_buttons(d: Driver) -> 
     assert view.state is State.CHOOSE_INTAKE_TYPE
     assert view.question is not None
     assert view.question.field_id == "intake_type"
-    assert view.info[0].startswith("Choose the first one")
+    assert view.info[0].startswith("If you are a health worker")
     assert "intake_type" not in {e.field_id for e in d.events() if e.type.startswith("field_")}
 
 
@@ -163,7 +163,12 @@ def test_unannounced_new_value_asks_which_is_correct(d: Driver) -> None:
     assert view.question.text == (
         "Earlier you said May 4, 2004. Now you said June 4, 2004. Which one is correct?"
     )
-    assert [o.label for o in view.question.options] == ["May 4, 2004", "June 4, 2004", "Neither"]
+    assert [o.label for o in view.question.options] == [
+        "May 4, 2004",
+        "June 4, 2004",
+        "Neither",
+        "I'm not sure",
+    ]
     d.choose("new")
     snap = d.service._repo.load(d.id)
     assert snap is not None
@@ -176,6 +181,30 @@ def test_inferred_change_goes_to_conflict_even_when_marked_correction(d: Driver)
     view = d.text("it was the June one", u)
     assert view.question is not None
     assert view.question.kind == "conflict"
+
+
+def test_not_sure_on_conflict_keeps_earlier_value_and_flags_both(d: Driver) -> None:
+    _answered_dob(d)
+    d.text("June 4 2004", understood(A, ("date_of_birth", "June 4 2004")))
+    assert d.view.question is not None
+    assert "not_sure" in [o.id for o in d.view.question.options]
+    d.text("I don't know", understood(ReplyKind.DONT_KNOW))
+    snap = d.service._repo.load(d.id)
+    assert snap is not None
+    dob = snap.answers["date_of_birth"]
+    assert (dob.value, dob.unresolved_other) == ("2004-05-04", "June 4, 2004")
+    unresolved = [e for e in d.events() if e.type == "conflict_unresolved"]
+    assert unresolved[0].payload == {"kept": "May 4, 2004", "other": "June 4, 2004"}
+
+
+def test_later_change_clears_unresolved_conflict(d: Driver) -> None:
+    _answered_dob(d)
+    d.text("June 4 2004", understood(A, ("date_of_birth", "June 4 2004")))
+    d.choose("not_sure")
+    d.text("x", understood(ReplyKind.CORRECTION, ("date_of_birth", "May 14 2004")))
+    snap = d.service._repo.load(d.id)
+    assert snap is not None
+    assert snap.answers["date_of_birth"].unresolved_other is None
 
 
 def test_neither_asks_the_field_again_now(d: Driver) -> None:
@@ -270,7 +299,7 @@ def test_off_topic_and_unsafe_keep_the_same_question(d: Driver, kind: ReplyKind,
 def test_why_and_meaning_show_fixed_text(d: Driver) -> None:
     _to(d, "date_of_birth")
     view = d.text("why?", understood(ReplyKind.CLARIFICATION, clarification="why"))
-    assert view.info == ("We use the date of birth to find the right record.",)
+    assert view.info == ("This helps us make sure we have the right person.",)
     view = d.text("what?", understood(ReplyKind.CLARIFICATION, clarification="meaning"))
     assert view.info == ("Type the month, the day and the year.",)
 
@@ -299,9 +328,11 @@ def test_pause_gives_a_code_and_resume_by_code_restores_the_place(d: Driver) -> 
     _to(d, "date_of_birth")
     view = d.send(c.Pause())
     assert view.state is State.PAUSED
-    code = view.info[-1].removeprefix("You can also use this code: ")
-    assert len(code.replace(" ", "")) == 8
-    assert d.service.find_by_resume_code(code.lower()) == d.id
+    assert view.info[-1] == "Write this code down."
+    code = view.resume_code
+    assert code is not None
+    assert d.service.find_by_resume_code(code.lower().replace("-", " ")) == d.id
+    assert d.service.find_by_resume_code("AAA-AAA") != d.id
     view = d.send(c.Resume())
     assert view.state is State.COLLECTING
     assert view.question is not None
