@@ -40,8 +40,8 @@ FIELDS: tuple[FieldDef, ...] = (
         why="We ask this so we only ask questions that fit you.",
         help=INTAKE_TYPE_HELP,
         options=(
-            Option(id=FI, label="I want care for myself or someone I look after"),
-            Option(id=PR, label="I work in health care and I am sending a referral"),
+            Option(id=FI, label="Care for me or someone I look after"),
+            Option(id=PR, label="I am a health worker sending a referral"),
             NOT_SURE,
         ),
         not_sure=NotSure.CLARIFY,

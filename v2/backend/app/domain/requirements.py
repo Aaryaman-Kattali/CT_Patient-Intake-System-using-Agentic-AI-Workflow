@@ -5,8 +5,9 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
+from app.domain import templates
 from app.domain.fields import Answers, FieldDef, answer_value
-from app.domain.registry import FIELDS
+from app.domain.registry import FIELDS, get_field
 from app.domain.types import ANSWERED, FieldStatus, IntakeType, NotSure, Tier
 from app.domain.wording import intake_type_of
 
@@ -113,6 +114,25 @@ class ReviewItem(BaseModel):
     tier: Tier
     state: Literal["still_needed", "not_known"]
     actions: tuple[ReviewAction, ...]
+    reason: str | None = None  # fixed line when the tier changed after a skip / don't know
+
+
+_TIER_CHANGED = frozenset({FieldStatus.SKIPPED, FieldStatus.DONT_KNOW})
+
+
+def requirement_reason(field: FieldDef, answers: Answers) -> str | None:
+    """Why a skipped / don't-know field is now needed. Only contact fields change tier."""
+    if _status(answers, field.id) not in _TIER_CHANGED or field.tier is not Tier.CONDITIONAL:
+        return None
+    method = answer_value(answers, "preferred_contact_method")
+    option = get_field("preferred_contact_method").option(method) if method else None
+    if (
+        intake_type_of(answers) is IntakeType.FAMILY_INQUIRY
+        and option
+        and method in CONTACT_BY_METHOD
+    ):
+        return templates.NEEDED_BECAUSE_METHOD.format(choice=option.label)
+    return templates.NEEDED_FOR_CONTACT
 
 
 def review_items(answers: Answers) -> list[ReviewItem]:
@@ -132,7 +152,13 @@ def review_items(answers: Answers) -> list[ReviewItem]:
             ("answer_now", "mark_unknown") if tier is Tier.REQUIRED else ("answer_now",)
         )
         items.append(
-            ReviewItem(field_id=field.id, tier=tier, state="still_needed", actions=actions)
+            ReviewItem(
+                field_id=field.id,
+                tier=tier,
+                state="still_needed",
+                actions=actions,
+                reason=requirement_reason(field, answers),
+            )
         )
     return items
 

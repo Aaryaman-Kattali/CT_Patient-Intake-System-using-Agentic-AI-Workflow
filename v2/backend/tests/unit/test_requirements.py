@@ -177,5 +177,21 @@ def test_tier_change_never_causes_a_repeat_and_shows_on_review() -> None:
     )
     field = next_field(answers)
     assert field is None or field.id != "email"
-    assert "email" in {item.field_id for item in review_items(answers)}
+    item = next(i for i in review_items(answers) if i.field_id == "email")
+    assert item.reason == "Needed because you chose Email."
     assert not can_submit(answers)
+
+
+def test_review_reason_for_phone_or_email_group() -> None:
+    from app.domain.requirements import review_items
+
+    answers = build(intake_type=PR, full_name="Alex Rivera", phone=FieldStatus.DONT_KNOW)
+    item = next(i for i in review_items(answers) if i.field_id == "phone")
+    assert item.reason == "Needed so we have a way to contact you."
+
+
+def test_no_reason_line_for_plain_deferred_field() -> None:
+    from app.domain.requirements import review_items
+
+    answers = build(intake_type=PR, full_name="Alex Rivera", phone=FieldStatus.DEFERRED)
+    assert all(i.reason is None for i in review_items(answers))

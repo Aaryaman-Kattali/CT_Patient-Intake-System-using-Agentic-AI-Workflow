@@ -12,11 +12,11 @@ import textstat
 from app.config import load_region_content
 from app.domain import templates as t
 from app.domain.clinical import CONDITION_CLAIMS
-from app.domain.registry import FIELDS
+from app.domain.registry import FIELDS, get_field
 
 MAX_GRADE = 6.0
 MAX_QUESTION_WORDS = 15
-MAX_LABEL_WORDS = 12  # the owner-approved intake_type option is 11 words
+MAX_LABEL_WORDS = 10
 
 BANNED = re.compile(
     r"\b(invalid|wrong|error|mistake|incorrect|failed|must|hurry|quick(ly)?|asap|"
@@ -35,6 +35,8 @@ SAMPLE = {
     "code": "ABCD 1234",
     "name": "Alex",
 }
+
+METHOD_OPTIONS = get_field("preferred_contact_method").options
 
 QUESTIONS = sorted({q for f in FIELDS for q in (f.question_self, f.question_other)})
 
@@ -61,6 +63,8 @@ SENTENCES = [
     t.MANY_TRIES,
     t.NEEDS_HUMAN,
     t.REVIEW_CANNOT_SUBMIT,
+    t.NEEDED_FOR_CONTACT,
+    *(t.NEEDED_BECAUSE_METHOD.format(choice=o.label) for o in METHOD_OPTIONS),
     load_region_content("US").crisis.heading,
     *load_region_content("US").crisis.lines,
 ]

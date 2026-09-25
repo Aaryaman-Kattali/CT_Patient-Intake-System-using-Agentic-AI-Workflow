@@ -70,6 +70,9 @@ NEEDS_HUMAN = "We have asked a staff member to contact you."
 REVIEW_STILL_NEEDED = "Still needed"
 REVIEW_NOT_KNOWN = "Not known"
 REVIEW_CANNOT_SUBMIT = "Some answers are still needed before you can send this form."
+# Shown when a field is listed because its tier changed after it was skipped or not known.
+NEEDED_BECAUSE_METHOD = "Needed because you chose {choice}."
+NEEDED_FOR_CONTACT = "Needed so we have a way to contact you."
 
 # --- Button labels.
 BUTTONS: MappingProxyType[str, str] = MappingProxyType(

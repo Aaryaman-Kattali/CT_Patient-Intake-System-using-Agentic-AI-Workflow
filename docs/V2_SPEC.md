@@ -285,6 +285,8 @@ Review screen and submit (Q1, updated):
 | required, marked "I don't know this" | Not known | Answer now | no |
 | optional (skipped / dont_know / never answered) | not listed | – | no |
 
+When a field is listed because its tier changed **after** it was skipped or marked "don't know" (e.g. email was "don't know", then the contact method became Email), the item shows a fixed reason line: "Needed because you chose Email." (preferred method) or "Needed so we have a way to contact you." (phone-or-email group).
+
 "I don't know this" saves status `unknown_confirmed` and appends a `field_marked_unknown` event. Submit is allowed once every effectively must_have field is answered. A required field still deferred at submit appears in the staff summary as "Not answered, please follow up". One marked `unknown_confirmed` appears as "Not known, please follow up".
 
 ### 5.3 Field list (owner-reviewed wording)
@@ -293,7 +295,7 @@ Intake types: `family_inquiry` (FI), `provider_referral` (PR). "Self / other" wo
 
 | # | id | Applies to | About | Required | Type | Question (self / other) | Example / options | `not_sure` |
 |---|---|---|---|---|---|---|---|---|
-| 1 | `intake_type` | all | – | must_have (not deferrable) | choice | "Which one describes you?" | I want care for myself or someone I look after · I work in health care and I am sending a referral · I'm not sure | clarify² |
+| 1 | `intake_type` | all | – | must_have (not deferrable) | choice | "Which one describes you?" | Care for me or someone I look after · I am a health worker sending a referral · I'm not sure | clarify² |
 | 2 | `relationship` | FI | – | must_have | choice | "Who is this form for?" | Me · My child · My parent · My partner · My brother or sister · Someone I look after · Another family member · I'm not sure | answer |
 | 3 | `respondent_name` | FI, relationship ≠ `me` | R | must_have | text | "What is your name?" | Jordan Rivera | defer |
 | 4 | `full_name` | all | patient | must_have | text | "What is your full name?" / "What is the patient's full name?" | Alex Rivera | defer |
