@@ -12,7 +12,6 @@ dependencies = [
     "sqlmodel==0.0.47",
     "google-adk==2.10.0",
     "google-genai==2.25.0",
-    "python-dateutil==2.9.0.post0",
     "phonenumbers==9.0.40",
     "email-validator==2.3.0",
 ]
@@ -25,7 +24,6 @@ dev = [
     "mypy==2.3.1",
     "pre-commit==4.6.2",
     "textstat==0.7.13",
-    "types-python-dateutil==2.9.0.20260807",
     "httpx2==2.13.1",
 ]
 
@@ -52,6 +50,10 @@ python_version = "3.12"
 strict = true
 plugins = ["pydantic.mypy"]
 files = ["app", "tests"]
+
+[[tool.mypy.overrides]]
+module = ["textstat"]  # dev-only wording checks; ships no type stubs
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

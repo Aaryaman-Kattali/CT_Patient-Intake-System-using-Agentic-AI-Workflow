@@ -39,6 +39,7 @@ This is a portfolio demo. It must never process real personal or health data.
 | D2 | **Benefit summary is kept only as a clearly labelled synthetic demo** (§11.2). | It shows the V1 feature working end to end. It cannot be real, because there is no insurance integration. Every output carries a "SYNTHETIC DEMO" label. |
 | D3 | V1's `contact_details` field is dropped. `preferred_contact_method` now chooses which existing contact field is required. | `contact_details` asks again for a phone or email the user already gave. V1's own saved record contains the answer "already given". That is a repeated question. |
 | D4 | Only one component uses an LLM: the **understanding agent**. Question choice, completion, email, staff summary and benefit demo are all deterministic code. | Design principle P2. See §6 for the one optional LLM experiment. |
+| D5 | In **Family Inquiry**, `phone`, `email` and `address` belong to the **respondent** (the person filling in the form), not the patient. Their questions always use "you" wording. A new field `respondent_name` (FI only, required when relationship ≠ "me") is asked right after `relationship`. In **Provider Referral**, the contact fields stay the patient's. | A child patient usually has no phone, and the clinic needs the parent's or carer's details. V1's `contact_details` field most likely covered this respondent contact. **D3's reasoning only held for relationship = "me".** `contact_details` stays dropped, because D5 now covers its purpose without asking twice. (Owner review of §5.3.) |
 
 ---
 
@@ -92,7 +93,7 @@ States roughly how many questions there are ("about 12"), that the user can stop
 
 - Dates: "May 4th 2004", "4 May 2004", "2004-05-04", "05/04/2004" and similar are all accepted. When a date could mean two things (both numbers ≤ 12 and different, e.g. `04/05/2004`), the system asks with **two buttons**: "April 5, 2004" / "May 4, 2004". Dates are always shown back with the month as a word.
 - Phone: any common format is accepted and normalized to E.164 (`phonenumbers`, default region from config).
-- Email: validated with `email-validator`, shown back in lower case.
+- Email: validated with `email-validator` (no deliverability check). The domain is lower-cased.
 - Gender: Woman, Man, Non-binary, Another gender (with a text box on the same screen), Prefer not to say, I'm not sure.
 
 ### 3.5 Corrections and conflicts
@@ -162,7 +163,7 @@ A single turn goes like this:
 | DB | SQLite via SQLModel (SQLAlchemy 2). Types chosen to port to Postgres unchanged (UUID as `Uuid`, JSON as `JSON`, timezone-aware `DateTime`). `create_all` for the demo. Alembic is added only if we move to Postgres. |
 | LLM | Google ADK (`google-adk`, current 2.x, pinned) + `google-genai` (current, pinned). **Not** the deprecated `google-generativeai`. |
 | Model | `GEMINI_MODEL` in config, never a literal in code. Proposed default: `gemini-3.5-flash-lite` (listed as current and stable on 2026-09-26; `gemini-2.0-flash` is listed as shut down). This will be re-checked against the docs before Phase 4. |
-| Parsing | `python-dateutil`, `phonenumbers`, `email-validator` |
+| Parsing | Own small date parser (fully deterministic: it never fills in a missing year or day, which `python-dateutil` does silently), `phonenumbers`, `email-validator` |
 | Quality | ruff (with `T201` "no print"), mypy (strict on `app/`), pytest, hypothesis, pre-commit |
 | Frontend | React + TypeScript + Vite. No SSR is needed: this is a single-page, one-question flow behind a JSON API, so Next.js adds nothing. Vitest + Testing Library, `axe-core`, Playwright for the keyboard walkthrough. |
 | Transport | Plain REST. SSE only if a concrete need appears. |
@@ -217,6 +218,7 @@ class Option(BaseModel):
     id: str                   # stable id stored in DB, e.g. "parent"
     label: str                # button text, e.g. "My child"
     special: Literal["not_sure", "prefer_not"] | None = None
+    free_text: bool = False   # shows a text box on the same screen ("Something else (type it)")
 
 class Condition(BaseModel):   # all must hold
     field_id: str
@@ -227,11 +229,16 @@ class FieldDef(BaseModel):
     id: str
     section: str
     order: int
-    required: bool | Literal["conditional"]
+    required: Literal["must_have", "required", "optional", "conditional"]
+    # must_have:   blocks submit until answered
+    # required:    asked like must_have, but can end as "not known" on review
+    # optional:    skip / "I'm not sure" is final
+    # conditional: tier decided by the contact rule (§5.3 note ¹)
     question_self: str        # "What is your date of birth?"
     question_other: str       # "What is the patient's date of birth?"
     label_self: str           # "your date of birth"   (used in confirm/conflict templates)
     label_other: str          # "the patient's date of birth"
+    short_label: str          # "date of birth" (review screen, "Updated: ...", staff summary)
     why: str                  # fixed "Why are you asking this?" text
     help: str                 # fixed "What does this mean?" text
     example: str | None       # "May 4, 2004"
@@ -240,52 +247,101 @@ class FieldDef(BaseModel):
     normalizer: str           # key into normalizers registry
     validator: str            # key into validators registry
     conditions: list[Condition] = []
-    allow_dont_know: bool     # False only for intake_type
+    about_respondent_in: frozenset[IntakeType] = frozenset()  # D5: FI contact fields
+    not_sure: Literal["clarify", "answer", "defer"]
+    # Applies only while the field is effectively must_have/required.
+    # On an effectively optional field, "I'm not sure" / "I don't know" is always FINAL:
+    # status dont_know, never asked again, never listed on review.
+    # clarify: show `help` + same buttons again (intake_type only)
+    # answer:  "I'm not sure" is a complete answer staff can follow up on
+    # defer:   status deferred; shown on review as "Still needed"
 ```
 
-Wording: `question_self` is used when the respondent is the patient (Family Inquiry with relationship "Me"). `question_other` is used for everyone else. Both are fixed, reviewed templates. The registry is loaded from Python (typed), not YAML, so mypy checks it.
+Wording rule (deterministic, one function):
+- A field is **about the respondent** if the intake type is in `about_respondent_in`. Otherwise it is about the patient.
+- Use `question_self` if the field is about the respondent, **or** the respondent is the patient (FI with relationship "Me").
+- Use `question_other` otherwise.
+
+Both templates are fixed and reviewed. The registry is loaded from Python (typed), not YAML, so mypy checks it.
 
 ### 5.2 Next-question selection (deterministic)
 
 ```
 applicable = [f for f in registry if conditions_met(f, values)]
 pending_queue non-empty         → that item (extra confirmation or conflict)
-first required, applicable field with status ∉ {accepted, confirmed, deferred}  (by order)
-first optional, applicable field with status ∉ {accepted, confirmed, skipped, dont_know}
+first must_have/required field (effective tier) with no saved status  (by order)
+first optional field (effective tier) with no saved status
 otherwise                       → REVIEW
 ```
 
-A deferred required field is **not asked again automatically**. It appears on the review screen as "Still needed", with an "Answer now" button. So the system never repeats a question on its own.
+A field with **any** saved status (answered, skipped, deferred, dont_know, unknown_confirmed) is **never asked again automatically**, even if its tier changes later (e.g. an optional email marked dont_know becomes must_have when the preferred method changes to Email). Such a field appears on the review screen instead. It appears on the review screen as "Still needed". So the system never repeats a question on its own.
 
-### 5.3 Draft field list (wording for your review)
+Review screen and submit (Q1, updated):
 
-Intake types: `family_inquiry`, `provider_referral`.
+| Effective tier | Missing field shown on review as | Actions | Blocks submit? |
+|---|---|---|---|
+| must_have | Still needed | Answer now | **yes** |
+| required | Still needed | Answer now · I don't know this | no |
+| required, marked "I don't know this" | Not known | Answer now | no |
+| optional (skipped / dont_know / never answered) | not listed | – | no |
 
-| # | id | Applies to | Required | Type | Question (self / other) | Example / options |
-|---|---|---|---|---|---|---|
-| 1 | `intake_type` | all | yes (not deferrable) | choice | "Which one describes you?" | "I want care for me or my family" · "I work in health care and I am sending a referral" · "I'm not sure" |
-| 2 | `relationship` | FI | yes | choice | "Who is the patient?" | Me · My child · My parent · My partner · My brother or sister · Someone I care for · Another family member · I'm not sure |
-| 3 | `full_name` | all | yes | text | "What is your full name?" / "What is the patient's full name?" | Alex Rivera |
-| 4 | `date_of_birth` | all | yes | date | "What is your date of birth?" / "What is the patient's date of birth?" | May 4, 2004 |
-| 5 | `preferred_contact_method` | FI | yes | choice | "How should we contact you?" | Phone call · Text message · Email · Letter · I'm not sure |
-| 6 | `phone` | all | conditional¹ | phone | "What is your phone number?" / "What is the patient's phone number?" | 202-555-0100 |
-| 7 | `email` | all | conditional¹ | email | "What is your email address?" / "What is the patient's email address?" | alex@example.com |
-| 8 | `address` | all | conditional¹ | text | "What is your home address?" / "What is the patient's home address?" | 12 Oak Street, Springfield, 62701 |
-| 9 | `inquiry_reason` | FI | yes | text | "What do you want help with?" | An autism assessment |
-| 10 | `referral_provider_name` | PR | yes | text | "What is the name of the provider making this referral?" | Dr. Sam Lee |
-| 11 | `referral_type` | PR | yes | choice | "What type of referral is this?" | Physician · Specialist · Emergency · Self · I'm not sure |
-| 12 | `referral_date` | PR | yes | date | "What date was the referral made?" | September 1, 2026 |
-| 13 | `referral_mode` | PR | no | choice | "How was the referral sent?" | Fax · Phone · Web form · I'm not sure |
-| 14 | `preferred_name` | all | no | text | "What name do you like people to use?" / "What name does the patient like people to use?" | Alex |
-| 15 | `gender` | all | no | choice | "What is your gender?" / "What is the patient's gender?" | Woman · Man · Non-binary · Another gender · Prefer not to say · I'm not sure |
+When a field is listed because its tier changed **after** it was skipped or marked "don't know" (e.g. email was "don't know", then the contact method became Email), the item shows a fixed reason line: "Needed because you chose Email." (preferred method) or "Needed so we have a way to contact you." (phone-or-email group).
 
-¹ Contact rule (checked before submit):
-- **FI:** the field matching `preferred_contact_method` is required (Phone call/Text → `phone`, Email → `email`, Letter → `address`). The other contact fields are optional. With "I'm not sure", either `phone` or `email` is required.
-- **PR:** either `phone` or `email` is required.
+"I don't know this" saves status `unknown_confirmed` and appends a `field_marked_unknown` event. Submit is allowed once every effectively must_have field is answered. A required field still deferred at submit appears in the staff summary as "Not answered, please follow up". One marked `unknown_confirmed` appears as "Not known, please follow up".
+
+### 5.3 Field list (owner-reviewed wording)
+
+Intake types: `family_inquiry` (FI), `provider_referral` (PR). "Self / other" wording follows the rule in §5.1. Fields marked **R** in "About" are about the respondent in FI.
+
+| # | id | Applies to | About | Required | Type | Question (self / other) | Example / options | `not_sure` |
+|---|---|---|---|---|---|---|---|---|
+| 1 | `intake_type` | all | – | must_have (not deferrable) | choice | "Which one describes you?" | Care for me or someone I look after · I am a health worker sending a referral · I'm not sure | clarify² |
+| 2 | `relationship` | FI | – | must_have | choice | "Who is this form for?" | Me · My child · My parent · My partner · My brother or sister · Someone I look after · Another family member · I'm not sure | answer |
+| 3 | `respondent_name` | FI, relationship ≠ `me` | R | must_have | text | "What is your name?" | Jordan Rivera | defer |
+| 4 | `full_name` | all | patient | must_have | text | "What is your full name?" / "What is the patient's full name?" | Alex Rivera | defer |
+| 5 | `date_of_birth` | all | patient | required | date | "What is your date of birth?" / "What is the patient's date of birth?" | May 4, 2004 | defer |
+| 6 | `preferred_contact_method` | FI | R | required⁴ | choice | "How do you want us to contact you?" | Phone call · Text message · Email · Letter in the mail · I'm not sure | answer |
+| 7 | `phone` | all | R in FI, patient in PR | conditional¹ | phone | "What is your phone number?" / "What is the patient's phone number?" | 202-555-0100 | defer |
+| 8 | `email` | all | R in FI, patient in PR | conditional¹ | email | "What is your email address?" / "What is the patient's email address?" | alex@example.com | defer |
+| 9 | `address` | all | R in FI, patient in PR | conditional¹ | text | "What is your home address?" / "What is the patient's home address?" | 12 Oak Street, Springfield, IL 62701 | defer |
+| 10 | `inquiry_reason` | FI | patient | required | choice + text³ | "What do you want help with?" / "What does the patient need help with?" | An autism assessment · Therapy or support · Help at school or work · Something else (type it) · I'm not sure | answer |
+| 11 | `referral_provider_name` | PR | – | required | text | "What is the name of the provider who made this referral?" | Dr. Sam Lee | defer |
+| 12 | `referral_type` | PR | – | required | choice | "What type of referral is this?" | Physician · Specialist · Emergency · I'm not sure | answer |
+| 13 | `referral_date` | PR | – | required | date | "What date was the referral made?" | September 1, 2026 | defer |
+| 14 | `referral_mode` | PR | – | optional | choice | "How was the referral sent?" | Fax · Phone · Web form · I'm not sure | final |
+| 15 | `preferred_name` | all | patient | optional | text | "What name do you want us to use for you?" / "What name does the patient want us to use?" | Alex | final |
+| 16 | `gender` | all | patient | optional | choice + text | "What is your gender?" / "What is the patient's gender?" | Woman · Man · Non-binary · Another gender (type it) · Prefer not to say · I'm not sure | final |
+
+In PR the respondent is a health worker, so "self" wording is never used for patient fields. `referral_provider_name`, `referral_type`, `referral_date` and `referral_mode` have a single wording.
+
+¹ **Contact rule** (checked before submit):
+- **FI:** `phone`, `email` and `address` are the **respondent's**, and their questions always use "you" wording, whoever the patient is (D5). The field matching `preferred_contact_method` is **must_have** (Phone call or Text message → `phone`, Email → `email`, Letter in the mail → `address`). The other two are optional. If `preferred_contact_method` is "I'm not sure", deferred or not known, the **phone-or-email group** applies.
+- **PR:** `phone`, `email` and `address` are the **patient's**. The **phone-or-email group** applies. `address` is optional.
+- **Phone-or-email group:** the group is must_have until one member has a value. `phone` is asked first as must_have. If `phone` is deferred, `email` becomes must_have and is asked next. Once either has a value, the other becomes optional. Both are listed on review until one is answered.
+
+² **`intake_type` "I'm not sure"** is a **clarification**, not an answer. Tapping it shows one fixed line explaining each option ("Choose the first one if you want care for yourself or someone you look after. Choose the second one if you are a health worker sending a patient to us."). Then it shows the same two buttons again. Nothing is saved, and a `clarification_shown` event is recorded. It does **not** count toward `repeated_questions` (§6.4, §14.2).
+
+³ **`inquiry_reason`** is a choice with a text box for "Something else (type it)". The stored value is the option id, plus the typed text verbatim for `something_else`. `help` text: "A few words is enough." **P9 check:** the options name the *service being requested*, chosen by the user. They are administrative routing categories, not conditions. The system never infers a condition from them. The staff summary shows them as "Asked for: …", and free text is quoted as the user's own words.
+
+`not_sure` column:
+- *answer*: "I'm not sure" is saved as a complete answer that staff can follow up on.
+- *defer*: status `deferred`, shown on review (§5.2).
+- *final*: the field is optional, so "I'm not sure" is a final answer: status `dont_know`, never asked again, never listed on review.
+- Contact fields follow *defer* while they are must_have on the current path and *final* while they are optional.
+
+⁴ `preferred_contact_method` is **required** (not must_have): if the respondent does not know, the phone-or-email group still guarantees a way to contact them. `relationship = not_sure` uses "other" wording and asks `respondent_name`.
 
 Once `preferred_name` is given, it is used in greetings only: the resume screen ("Welcome back, Alex.") and the review screen heading. It is never inserted into question templates, so question wording stays fixed (P3).
 
-Approximate totals: FI has 7 required + 4 optional questions. PR has 7 required + 4 optional. So the start screen says "about 12 questions".
+Approximate totals:
+
+| Path | Required | Optional | Total |
+|---|---|---|---|
+| FI, relationship = me | 7 (intake_type, relationship, full_name, date_of_birth, preferred_contact_method, 1 contact field, inquiry_reason) | 4 (2 other contact fields, preferred_name, gender) | 11 |
+| FI, relationship ≠ me | 8 (as above + respondent_name) | 4 | 12 |
+| PR | 7 (intake_type, full_name, date_of_birth, phone or email, referral_provider_name, referral_type, referral_date) | 5 (other of phone/email, address, referral_mode, preferred_name, gender) | 12 |
+
+The start screen is shown before the intake type is known, so it says "about 12 questions". After that, progress uses the exact count for the path.
 
 Mapping to V1 values is kept for comparison. For example `relationship=child` means the respondent is the patient's parent, which is V1's `Parent`.
 
@@ -365,7 +421,7 @@ For each proposal:
 | DISTRESS (crisis) | → NEEDS_HUMAN | fixed emergency guidance + "Talk to a person" |
 | UNSAFE | no state change, `unsafe_blocked` event | "I can only use the information for this form. I cannot send or share anything else." + same question |
 
-Showing the same pending question again after a clarification or off-topic reply is **not** a repeated question. It is the same turn. A repeated question means asking again for a field that is already accepted, confirmed, skipped, deferred or `dont_know`, without the user asking to change it.
+Showing the same pending question again after a clarification or off-topic reply is **not** a repeated question. It is the same turn. This includes `intake_type` → "I'm not sure", which shows one fixed explanation line and then the same two buttons (§5.3 note ²). A repeated question means asking again for a field that is already accepted, confirmed, skipped, deferred or `dont_know`, without the user asking to change it.
 
 ### 6.5 Distress and crisis: deterministic backstop
 
@@ -411,7 +467,8 @@ Compare this single understanding agent against an ADK multi-agent variant (for 
 | RESOLVING_CONFLICT | `conflict_resolved` | same rules as the three rows above | CONFIRMING_EXTRA / REVIEW / COLLECTING |
 | COLLECTING / CONFIRMING_EXTRA / REVIEW | `correction_undone` | previous turn was a `field_corrected` | same state |
 | REVIEW | `edit_field(field_id)` | field applicable | COLLECTING (that field pinned, `return_to_review=true`) |
-| REVIEW | `submit` | required complete ∧ contact rule ∧ policy allow | SUBMITTED |
+| REVIEW | `field_marked_unknown(field_id)` | effective tier = required | REVIEW |
+| REVIEW | `submit` | every effectively must_have field answered ∧ policy allow | SUBMITTED |
 | REVIEW | `submit` | otherwise | REVIEW (response lists what is missing) |
 | any collecting state | `pause` | – | PAUSED (saves `resume_state`) |
 | PAUSED | `resume` | valid token | `resume_state` |
@@ -434,9 +491,9 @@ Every write for one turn happens in **one transaction**. So a saved answer and i
 | Table | Key columns | Notes |
 |---|---|---|
 | `intakes` | `id` UUIDv4 PK · `intake_type` · `state` · `resume_state` · `respondent` (self/other) · `return_to_review` · `token_hash` · `resume_code_hash` · `synthetic` (always true) · `created_at` · `updated_at` | One row per intake. No module globals. |
-| `field_values` | (`intake_id`, `field_id`) unique · `value` · `display_value` · `status` (accepted/confirmed/skipped/deferred/dont_know) · `source` (explicit/inferred/button) · `attempts` · `updated_at` | Current value per field. |
+| `field_values` | (`intake_id`, `field_id`) unique · `value` · `display_value` · `status` (accepted/confirmed/skipped/deferred/dont_know/unknown_confirmed) · `source` (explicit/inferred/button) · `attempts` · `updated_at` | Current value per field. |
 | `pending_items` | `id` · `intake_id` · `seq` · `kind` (extra/conflict/date_choice) · `field_id` · `payload` JSON | The FIFO queue behind CONFIRMING_EXTRA / RESOLVING_CONFLICT. |
-| `intake_events` | `id` · `intake_id` · `seq` (per intake, unique) · `type` · `field_id` · `payload` JSON · `created_at` | **Append-only.** Types: `created`, `question_shown`, `field_proposed`, `field_accepted`, `field_confirmed`, `field_rejected`, `field_corrected`, `conflict_detected`, `conflict_resolved`, `field_skipped`, `field_deferred`, `paused`, `resumed`, `distress_shown`, `needs_human`, `unsafe_blocked`, `submitted`, `email_sent`, `email_denied`, `staff_summary_generated`, `benefit_demo_generated`. |
+| `intake_events` | `id` · `intake_id` · `seq` (per intake, unique) · `type` · `field_id` · `payload` JSON · `created_at` | **Append-only.** Types: `created`, `question_shown`, `field_proposed`, `field_accepted`, `field_confirmed`, `field_rejected`, `field_corrected`, `conflict_detected`, `conflict_resolved`, `field_skipped`, `field_deferred`, `field_marked_unknown`, `paused`, `resumed`, `distress_shown`, `needs_human`, `unsafe_blocked`, `submitted`, `email_sent`, `email_denied`, `staff_summary_generated`, `benefit_demo_generated`. |
 | `llm_calls` | `id` · `intake_id` · `agent` · `model` · `input_tokens` · `output_tokens` · `latency_ms` · `reply_kind` · `status` (ok/parse_error/timeout/rejected) · `created_at` | **No prompt or response text** by default. |
 | `email_sends` | `id` · `intake_id` · `idempotency_key` (unique) · `status` · `provider` · `created_at` | Idempotency and audit. The recipient is not stored here. It is always re-read from `field_values`. |
 | `staff_outputs` | `id` · `intake_id` · `kind` (staff_summary/benefit_demo) · `content` JSON · `created_at` | Generated drafts. |
@@ -549,11 +606,15 @@ class StaffSummary(BaseModel):
     title: Literal["Intake summary for staff"]
     disclaimer: str                   # "Built from the form answers only. Not a clinical document."
     sections: dict[str, list[Statement]]   # by registry section
-    not_answered: list[Statement]     # deferred / skipped / don't know, each cited
+    not_answered: list[Statement]     # "Not answered, please follow up" (deferred) and
+                                      # "Not known, please follow up" (unknown_confirmed), each cited
     notes: list[Statement]            # administrative only, e.g. "Asked to talk to a person" (event-cited)
 ```
 
-- A validator checks that every statement has ≥ 1 source, that every source exists for this intake, and that the text contains no clinical terms. It uses a deny-list: diagnosis, disorder, assessment, plan, prognosis, and the ICD-code pattern `\b[A-TV-Z]\d{2}(\.\d{1,4})?\b`. Free-text answers (e.g. `inquiry_reason`) are quoted verbatim as the user's own words, marked as such, and never rephrased.
+- A validator checks that every statement has ≥ 1 source, that every source exists for this intake, and that system-written text contains no clinical terms. Two deny-lists live in `app/domain/clinical.py`:
+  - `CONDITION_CLAIMS` (diagnosis, disorder, syndrome, symptom, prognosis, "has autism", ICD-10 codes such as `F84.0`) is banned in **every** fixed text, including option labels.
+  - `CLINICAL_TERMS` adds assessment, treatment plan and similar words, and applies to text the system writes itself.
+  - A user's own chosen or typed value is quoted verbatim as theirs, with its source field cited, and is not checked against `CLINICAL_TERMS`. For example, `inquiry_reason` = "An autism assessment" names the service they are asking for.
 - My recommendation is that it stays deterministic. An LLM-written version is only an optional experiment (§6.8), and it would have to pass the same validator.
 
 ### 11.2 Benefit summary (synthetic demo, D2)
@@ -730,9 +791,10 @@ I renumbered to match your order: you listed six implementation steps under "Pha
 
 | # | Decision |
 |---|---|
-| Q1 | Submit is blocked until all required fields are answered. The review screen shows "Answer now" for each missing one. |
+| Q1 | **Updated:** required fields are split into two tiers (§5.2). *must_have* (intake_type, relationship, respondent_name, full_name, and the contact field required by the contact rule) blocks submit. *required* (date_of_birth, preferred_contact_method, inquiry_reason, referral_provider_name, referral_type, referral_date) shows "Answer now" and "I don't know this" on review and can end as `unknown_confirmed`. Submit is allowed once all must_have fields are answered. **Reason:** a respondent may genuinely not know, for example, a patient's date of birth, and the form must never become impossible to finish. |
 | Q2 | US defaults, with `REGION=US` in config. Phone parsing uses the region from config. |
 | Q3 | Crisis and emergency text (911, 988) lives in a per-region content file, not in code. |
+| Q1b | "I'm not sure" on an effectively optional field is final (status `dont_know`): saved, never asked again, never shown as "Still needed". |
 | Q4 | `preferred_name` (optional; once given, used in greetings) and `gender` (optional, inclusive options plus "Prefer not to say") are included. |
 | Q5 | The owner reviews the §5.3 wording before Phase 3 and sends edits. §5.3 is a draft until then. |
 | Q6 | The staff summary is deterministic. |
@@ -746,3 +808,16 @@ Additional regression tests from these decisions:
 - `test_crisis_text_loaded_from_region_file`
 - `test_preferred_name_never_in_question_text`
 - `test_unit_tests_do_not_need_api_key` (runs the default suite with no key in the environment; this is also what CI does)
+
+Additional regression tests from the §5.3 owner review:
+- `test_fi_contact_fields_belong_to_respondent` (FI with relationship ≠ me: phone/email/address use "you" wording and are about the respondent; PR: the patient's)
+- `test_respondent_name_only_when_relationship_not_me`
+- `test_intake_type_not_sure_is_clarification_not_repeat` (shows the explanation, then the same buttons; nothing saved; `repeated_questions` stays 0)
+- `test_inquiry_reason_options_are_administrative` (no option label contains a condition or clinical term from the §11.1 deny-list)
+- `test_start_screen_count_matches_registry` ("about 12" stays within ±1 of every path's total)
+
+Additional regression tests from the Q1 update:
+- `test_optional_not_sure_is_final_and_not_listed_on_review`
+- `test_required_field_can_be_marked_unknown_and_submit_allowed`
+- `test_must_have_field_blocks_submit`
+- `test_unknown_field_shown_as_follow_up_in_staff_summary` (Phase 6)

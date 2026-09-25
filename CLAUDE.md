@@ -28,6 +28,7 @@ Hospital intake assistant for autistic patients and people filling forms for the
 - **Model IDs** come from `GEMINI_MODEL` in config, never from literals in code. Check the current Gemini model list and the installed ADK API before writing agent code.
 - **Libraries:** use `google-genai`, not the deprecated `google-generativeai`. Do not add LangChain, LangGraph, RAG or vector DBs without a concrete, stated requirement. Prefer boring solutions.
 - **Plain language:** user-facing text has a reading grade of 6 or lower, 15 words or fewer per question, and exactly one `?`. No idioms, no blame, no exclamation marks.
+- **Checks:** when a wording or quality check fails, fix the content. Never loosen a threshold without the owner's approval.
 - **Code style:** keep functions small and typed. Run `ruff`, `mypy` and `pytest` before calling a phase done. Do not use `print`; use the redacting logger.
 - **Process:** work in phases and stop at each checkpoint for approval. Ask about unclear product decisions instead of guessing.
 - **Git:** never rewrite git history or force-push without explicit approval. This checkout needs `git -c safe.directory=...`; do not change the global git config.
