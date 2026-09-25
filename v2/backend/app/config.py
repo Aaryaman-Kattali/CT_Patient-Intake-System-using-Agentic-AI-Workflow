@@ -10,6 +10,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 REGIONS_DIR = Path(__file__).resolve().parent / "content" / "regions"
+# Outside the repository, so intake data can never be committed by accident.
+DEFAULT_DB_PATH = Path.home() / ".intake-v2" / "intake.db"
 
 
 class Settings(BaseSettings):
@@ -22,7 +24,7 @@ class Settings(BaseSettings):
 
     gemini_model: str = Field(default="gemini-3.5-flash-lite", min_length=1)
     synthetic_only: bool = True
-    database_url: str = f"sqlite:///{(BACKEND_DIR / 'var' / 'intake.db').as_posix()}"
+    database_url: str = f"sqlite:///{DEFAULT_DB_PATH.as_posix()}"
     email_provider: Literal["console", "smtp"] = "console"
     region: str = Field(default="US", pattern=r"^[A-Z]{2}$")
     max_message_chars: int = Field(default=1000, ge=50, le=10_000)

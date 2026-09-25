@@ -415,7 +415,7 @@ For each proposal:
 | CLARIFICATION | no state change | field `why` or `help` text, then the same pending question |
 | DONT_KNOW | optional: status `dont_know`; required: `deferred` | "That is okay." then next question |
 | SKIP | same as DONT_KNOW, status `skipped`/`deferred` | "Skipped." then next question |
-| PAUSE | → PAUSED | fixed pause text + resume code |
+| PAUSE | → PAUSED (the service turns a typed pause into the same Pause command as the button, so a resume code is always issued) | fixed pause text + resume code |
 | OFF_TOPIC | no state change | "I can only help with this form." + same question |
 | DISTRESS (overwhelmed) | no state change | fixed supportive text + 3 buttons: Take a break · Talk to a person · Keep going |
 | DISTRESS (crisis) | → NEEDS_HUMAN | fixed emergency guidance + "Talk to a person" |
@@ -488,9 +488,11 @@ Any (state, event) pair not in the table raises `IllegalTransition`, is logged, 
 
 Every write for one turn happens in **one transaction**. So a saved answer and its event either both exist or neither does.
 
+**Turn numbers (optimistic lock).** Every intake has a `turn` counter. Every reply carries the turn number the client last saw. The save is `UPDATE intakes ... WHERE id = ? AND turn = ?`. If another tab or a double click already moved the intake on, the reply is **stale**: nothing is written and the response carries the current view. So a stale or duplicate reply can never save twice or skip a question.
+
 | Table | Key columns | Notes |
 |---|---|---|
-| `intakes` | `id` UUIDv4 PK · `intake_type` · `state` · `resume_state` · `respondent` (self/other) · `return_to_review` · `token_hash` · `resume_code_hash` · `synthetic` (always true) · `created_at` · `updated_at` | One row per intake. No module globals. |
+| `intakes` | `id` UUIDv4 PK · `state` · `turn` · `resume_state` · `pinned_field` · `return_to_review` · `interruption` · `attempts` JSON · `undo` JSON · `token_hash` · `resume_code_hash` · `synthetic` (always true) · `created_at` · `updated_at` | One row per intake. No module globals. Intake type and respondent are derived from `field_values`, not duplicated. |
 | `field_values` | (`intake_id`, `field_id`) unique · `value` · `display_value` · `status` (accepted/confirmed/skipped/deferred/dont_know/unknown_confirmed) · `source` (explicit/inferred/button) · `attempts` · `updated_at` | Current value per field. |
 | `pending_items` | `id` · `intake_id` · `seq` · `kind` (extra/conflict/date_choice) · `field_id` · `payload` JSON | The FIFO queue behind CONFIRMING_EXTRA / RESOLVING_CONFLICT. |
 | `intake_events` | `id` · `intake_id` · `seq` (per intake, unique) · `type` · `field_id` · `payload` JSON · `created_at` | **Append-only.** Types: `created`, `question_shown`, `field_proposed`, `field_accepted`, `field_confirmed`, `field_rejected`, `field_corrected`, `conflict_detected`, `conflict_resolved`, `field_skipped`, `field_deferred`, `field_marked_unknown`, `paused`, `resumed`, `distress_shown`, `needs_human`, `unsafe_blocked`, `submitted`, `email_sent`, `email_denied`, `staff_summary_generated`, `benefit_demo_generated`. |
@@ -498,7 +500,9 @@ Every write for one turn happens in **one transaction**. So a saved answer and i
 | `email_sends` | `id` · `intake_id` · `idempotency_key` (unique) · `status` · `provider` · `created_at` | Idempotency and audit. The recipient is not stored here. It is always re-read from `field_values`. |
 | `staff_outputs` | `id` · `intake_id` · `kind` (staff_summary/benefit_demo) · `content` JSON · `created_at` | Generated drafts. |
 
-The DB file path comes from `DATABASE_URL` (default `v2/backend/var/intake.db`, gitignored). Nothing is written into the source tree.
+The DB file path comes from `DATABASE_URL`. The default is `~/.intake-v2/intake.db`, **outside the repository**, so intake data can never be committed by accident. `v2/backend/var/` and `*.db` stay gitignored as a backstop.
+
+**Append-only events.** The repository has no update or delete path for `intake_events`. On SQLite, triggers also abort any `UPDATE` or `DELETE` on that table. (Postgres would use a `REVOKE UPDATE, DELETE` or an equivalent trigger.)
 
 ---
 
@@ -513,7 +517,7 @@ All `/intakes/{id}/*` routes require header `X-Intake-Token`. This is a demo tok
 | `POST /intakes` | Create an intake | Returns `{id, token, resume_code, turn}`. State GREETING. |
 | `GET /intakes/{id}` | Current state + current turn + progress | Used on page load and resume. |
 | `POST /intakes/{id}/start` | GREETING → CHOOSE_INTAKE_TYPE | |
-| `POST /intakes/{id}/replies` | Body `{text}` or `{choice}` + `client_turn_id` | Returns the next `Turn`. `client_turn_id` makes a double-submit harmless. |
+| `POST /intakes/{id}/replies` | Body: a command (`text`, `choose`, `skip`, `undo`, ...) + `turn` | Returns the next `Turn`. A reply whose `turn` is not the current one gets **409 stale** with the current view (§8 turn numbers). |
 | `POST /intakes/{id}/pause` | → PAUSED | Returns resume instructions. |
 | `POST /intakes/{id}/resume` | PAUSED/NEEDS_HUMAN → previous state | Token, or `{resume_code}` from a new device. |
 | `GET /intakes/{id}/review` | All values, grouped by section, plus "Still needed" | |
@@ -684,7 +688,7 @@ Every Critical and High item has at least one named test. All of them live in `t
 | B4 invented diagnoses | High | `test_no_soap_endpoint` · `test_staff_summary_every_statement_cites_source` · `test_staff_summary_contains_no_clinical_terms` |
 | B5 email without review | High | `test_email_denied_in_every_state_except_submitted` · `test_submit_requires_review_state` |
 | B9 no tests | High | Covered by the CI workflow itself. `test_ci_workflow_runs_tests_and_linters` checks the workflow file lists the steps. |
-| B11 data inside source tree | High | `test_default_db_path_is_gitignored` · `test_smtp_provider_rejects_non_reserved_domains` |
+| B11 data inside source tree | High | `test_default_db_path_is_outside_repo` · `test_in_repo_db_location_is_gitignored` · `test_db_path_comes_from_config` · `test_smtp_provider_rejects_non_reserved_domains` |
 
 Other safety tests (in `tests/safety`):
 - `test_injection_cannot_change_state_or_recipient`
@@ -815,6 +819,15 @@ Additional regression tests from the §5.3 owner review:
 - `test_intake_type_not_sure_is_clarification_not_repeat` (shows the explanation, then the same buttons; nothing saved; `repeated_questions` stays 0)
 - `test_inquiry_reason_options_are_administrative` (no option label contains a condition or clinical term from the §11.1 deny-list)
 - `test_start_screen_count_matches_registry` ("about 12" stays within ±1 of every path's total)
+
+Phase 4 regression tests (`tests/regression/test_workflow_regressions.py`):
+- `test_partial_intake_survives_restart` · `test_each_accepted_answer_is_committed_before_response`
+- `test_duplicate_reply_does_not_save_twice_or_skip` · `test_second_tab_with_old_turn_is_rejected_and_can_refresh`
+- `test_undo_restores_previous_value` · `test_undo_rejected_after_another_turn` · `test_correction_requires_quoted_value`
+- `test_intake_events_append_only` · `test_default_db_path_is_outside_repo` · `test_db_path_comes_from_config`
+- `test_concurrent_intakes_are_isolated` · `test_intake_ids_are_uuid4` · `test_token_and_resume_code_are_stored_hashed`
+- `test_intake_type_asked_once` · `test_intake_type_not_sure_is_clarification_not_repeat`
+- `test_turn_has_at_most_one_question_and_no_repeats` (property test) · `test_illegal_transitions_raise` · `test_submitted_is_terminal` · `test_paused_only_accepts_resume`
 
 Additional regression tests from the Q1 update:
 - `test_optional_not_sure_is_final_and_not_listed_on_review`

@@ -45,4 +45,13 @@ class FieldStatus(StrEnum):
     UNKNOWN_CONFIRMED = "unknown_confirmed"
 
 
+class Source(StrEnum):
+    """Provenance of a value. Inferred values always need a yes/no confirmation."""
+
+    EXPLICIT = "explicit"  # quoted from the user's message
+    INFERRED = "inferred"  # the LLM mapped the user's words to a value
+    BUTTON = "button"
+    REVIEW_EDIT = "review_edit"
+
+
 ANSWERED = frozenset({FieldStatus.ACCEPTED, FieldStatus.CONFIRMED})

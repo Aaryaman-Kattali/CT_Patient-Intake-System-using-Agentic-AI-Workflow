@@ -124,9 +124,10 @@ def test_synthetic_only_cannot_be_disabled(monkeypatch: pytest.MonkeyPatch) -> N
 # --- B11 data inside source tree ------------------------------------------
 
 
-def test_default_db_path_is_gitignored() -> None:
-    db_path = Path(Settings().database_url.removeprefix("sqlite:///"))
-    rel = db_path.relative_to(REPO_ROOT).as_posix()
+def test_in_repo_db_location_is_gitignored() -> None:
+    """Backstop: the default DB is outside the repo (test_default_db_path_is_outside_repo),
+    but a DATABASE_URL pointing at the old in-repo location must still never be committed."""
+    rel = "v2/backend/var/intake.db"
     assert _git("check-ignore", "--no-index", rel).strip() == rel
 
 

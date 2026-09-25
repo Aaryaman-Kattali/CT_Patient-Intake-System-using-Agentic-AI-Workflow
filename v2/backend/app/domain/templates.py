@@ -29,11 +29,12 @@ RETRY_EXAMPLE = "Here is an example: {example}."
 SAVED = "Saved."
 NOT_SURE_OK = "That is okay."
 SKIPPED = "Skipped."
+ANSWER_LATER = "You can answer this later."
 UPDATED = "Updated: {short_label} is {value}."
 UNDONE = "Changed back: {short_label} is {value}."
 
 # --- Single questions built from fixed parts. Exactly one "?" each.
-CONFIRM_VALUE = "Is {label} {value}?"
+CONFIRM_VALUE = "{label}: {value}. Is that right?"
 DATE_CHOICE = "Which date do you mean?"
 CONFLICT_EARLIER = "Earlier you said {old}."
 CONFLICT_NOW = "Now you said {new}."
@@ -78,6 +79,7 @@ NEEDED_FOR_CONTACT = "Needed so we have a way to contact you."
 BUTTONS: MappingProxyType[str, str] = MappingProxyType(
     {
         "start": "Start",
+        "resume": "Go back to my form",
         "yes": "Yes",
         "no": "No",
         "neither": "Neither",

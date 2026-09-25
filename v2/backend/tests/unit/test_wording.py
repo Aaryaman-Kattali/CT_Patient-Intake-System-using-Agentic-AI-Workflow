@@ -70,8 +70,7 @@ SENTENCES = [
 ]
 
 COMPOSED_QUESTIONS = [
-    *(t.CONFIRM_VALUE.format(label=f.label_self, value="Sample value") for f in FIELDS),
-    *(t.CONFIRM_VALUE.format(label=f.label_other, value="Sample value") for f in FIELDS),
+    *(t.CONFIRM_VALUE.format(label=f.short_label.capitalize(), value="Sample") for f in FIELDS),
     " ".join([t.CONFLICT_EARLIER, t.CONFLICT_NOW, t.CONFLICT_QUESTION]).format(**SAMPLE),
     t.DATE_CHOICE,
 ]
