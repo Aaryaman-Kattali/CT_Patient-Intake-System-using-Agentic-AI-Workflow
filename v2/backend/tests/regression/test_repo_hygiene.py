@@ -17,7 +17,8 @@ APP_DIR = BACKEND_DIR / "app"
 EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@([A-Za-z0-9-]+\.)+[A-Za-z]{2,}")
 PHONE_RE = re.compile(r"(?<!\d)(\(?\d{3}\)?[-. ]?\d{3}[-. ]\d{4})(?!\d)")
 ALLOWED_EMAIL_DOMAINS = re.compile(
-    r"@(example\.(com|org|net)|[\w.-]+\.(test|invalid)|users\.noreply\.github\.com|anthropic\.com)$"
+    r"@(example\.(com|org|net)|[\w.-]+\.(test|invalid)|users\.noreply\.github\.com|anthropic\.com)$",
+    re.IGNORECASE,
 )
 
 
