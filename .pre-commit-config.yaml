@@ -1,0 +1,36 @@
+# V1 (agentic-ai/) is a frozen reference and is excluded from all hooks.
+exclude: ^agentic-ai/
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-added-large-files
+      - id: check-merge-conflict
+      - id: check-toml
+      - id: check-yaml
+      - id: detect-private-key
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+
+  # Tools run from the locked uv environment, so versions match CI exactly.
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: ruff check
+        entry: uv run --project v2/backend ruff check --fix
+        language: system
+        types: [python]
+        files: ^v2/backend/
+      - id: ruff-format
+        name: ruff format
+        entry: uv run --project v2/backend ruff format
+        language: system
+        types: [python]
+        files: ^v2/backend/
+      - id: mypy
+        name: mypy
+        entry: bash -c 'cd v2/backend && uv run mypy'
+        language: system
+        pass_filenames: false
+        files: ^v2/backend/
