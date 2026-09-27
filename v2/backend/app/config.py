@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     # Derives resume codes. Set in .env; at least 32 characters.
     app_secret: SecretStr = Field(min_length=32)
     # Read by our Settings from .env and passed to the Gemini client explicitly.
-    # Optional: without it, typed replies get a calm "I did not understand" and buttons work.
+    # Optional: without it, buttons work and typed replies get "Typing is not working right now".
     google_api_key: SecretStr | None = None
     synthetic_only: bool = True
     database_url: str = f"sqlite:///{DEFAULT_DB_PATH.as_posix()}"
@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     region: str = Field(default="US", pattern=r"^[A-Z]{2}$")
     max_message_chars: int = Field(default=1000, ge=50, le=10_000)
     max_field_attempts: int = Field(default=3, ge=1, le=10)
-    llm_timeout_s: float = Field(default=15.0, gt=0)
+    llm_timeout_s: float = Field(default=8.0, gt=0)  # one retry: worst case ~16 s
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
 
     @field_validator("synthetic_only")
@@ -46,6 +46,11 @@ class Settings(BaseSettings):
                 "and must never process real personal or health information."
             )
         return value
+
+    @field_validator("google_api_key")
+    @classmethod
+    def _blank_key_is_no_key(cls, value: SecretStr | None) -> SecretStr | None:
+        return value if value is not None and value.get_secret_value().strip() else None
 
     @field_validator("region")
     @classmethod

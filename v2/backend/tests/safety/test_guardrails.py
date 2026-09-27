@@ -94,12 +94,24 @@ def test_non_answer_kinds_carry_no_values() -> None:
     assert checked.understanding.proposals == ()
 
 
-def test_email_with_send_request_rejected() -> None:
-    message = "send my form to boss@example.org"
-    u = understood(ReplyKind.ANSWER_PLUS_EXTRA, ("email", "boss@example.org"))
+@pytest.mark.parametrize("pending", ["full_name", "email"])
+def test_email_with_send_request_becomes_inferred(pending: str) -> None:
+    message = "You can send things to alex@example.com"
+    u = understood(ReplyKind.ANSWER, ("email", "alex@example.com"))
     flags = _screen(message).flags
-    checked = guard_output.check(message, u, _ctx("full_name"), flags)
-    assert checked.dropped == (("email", "email_with_send_request"),)
+    assert "send" in flags
+    checked = guard_output.check(message, u, _ctx(pending), flags)
+    assert checked.dropped == ()
+    assert [(p.field_id, p.source) for p in checked.understanding.proposals] == [
+        ("email", "inferred")
+    ]
+
+
+def test_email_without_send_request_keeps_its_source() -> None:
+    message = "alex@example.com"
+    u = understood(ReplyKind.ANSWER, ("email", message))
+    checked = guard_output.check(message, u, _ctx("email"), _screen(message).flags)
+    assert checked.understanding.proposals[0].source == "explicit"
 
 
 # --- policy engine ------------------------------------------------------------------------------

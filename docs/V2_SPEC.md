@@ -112,7 +112,7 @@ Particular attention to:
 - 3.2.6 Consistent Help: the "Why" link and "Take a break" button stay in the same place on every screen.
 - **3.3.7 Redundant Entry**: this is the same idea as "never ask twice".
 - 3.3.8 Accessible Authentication: the resume code can be copied and pasted. There are no puzzles.
-- Full keyboard use. Focus moves to the new question heading on each turn. Acknowledgements are announced through `aria-live="polite"`.
+- Full keyboard use. Focus moves to the new question heading on each turn. Acknowledgements are announced through `aria-live="polite"`. If a typed reply takes more than 1 second to read, a calm "Reading your answer…" status is shown and announced the same way (Phase 7).
 - Adjustable text size (100 / 125 / 150 / 200 %), remembered per browser.
 - Calm visual design: neutral palette, no red for "errors" (a neutral note with an icon and text instead), generous spacing, one column.
 
@@ -174,7 +174,13 @@ A single turn goes like this:
 - The agent: `include_contents="none"` (no history), no tools, no sub-agents, transfers disallowed, no `output_key`, temperature 0. Each call uses a fresh ADK session that is deleted afterwards.
 - `InMemorySessionService.create_session` is `async` (with a separate `create_session_sync`). This confirms audit item A5: V1 calls it without `await`.
 - `google-genai` reads `GOOGLE_API_KEY` (then `GEMINI_API_KEY`) from the **process environment**. Our settings read `.env` into the `Settings` object only, so the key is passed to the client explicitly: `Gemini(model=GEMINI_MODEL, client_kwargs={"api_key": ...})`. Nothing is written to `os.environ`.
-- One retry on a parse error or timeout; then the turn changes nothing and shows "I did not understand. Here is the question again."
+- One retry on a parse error or timeout (`LLM_TIMEOUT_S` = 8, so the worst case is about 16 s); then the turn changes nothing and shows a fixed "typing is not working" message. The same happens when there is no API key or the API returns an error. There are two versions, chosen by the current question:
+  - Questions with buttons (choice fields, yes/no, date choice, conflict): "Typing is not working right now. You can use the buttons, or take a break and come back."
+  - Typed questions (text, date, phone, email): "Typing is not working right now. Please try again in a moment, or take a break and come back."
+
+  "I did not understand. Here is the question again." is only for when the model worked but found nothing usable.
+- The understander is built once and runs every call on one long-lived event loop in a background thread. A new event loop per call (`asyncio.run`) leaves the Gemini client's connections tied to a closed loop. The timeout wraps only the model call, not the in-memory session setup.
+- **Latency (Phase 5 live runs):** setup is not the bottleneck (imports about 1.9 s once per process, agent build about 0.05 s). Most calls take 1 to 3 s. The slow calls were the API itself: the same slowness happened with plain `google-genai` calls without ADK, including requests that hung for about 40 s and then returned a server error. The model reports no thinking tokens. The 8 s timeout with one retry is the defence.
 - Offline tests plug a scripted `BaseLlm` into the real `LlmAgent` + `Runner`, so the ADK wiring is tested without a network or a key.
 
 **Original ADK note:** before writing agent code (Phase 4), I will read the installed ADK version's API. Specifically I will check how `LlmAgent(output_schema=...)` passes the schema to Gemini, the `Runner`/session API, and whether `create_session` is async. If ADK does not give reliable schema-constrained output, the understanding agent will call `google-genai` directly with `response_schema`, and ADK will stay only as the agent wrapper. I will report this, not decide it silently.
@@ -407,6 +413,7 @@ For each proposal:
 
 | Proposal | Result |
 |---|---|
+| pending field, date/phone/email/choice, quote reads as exactly one value (see below) | accept, save (explicit) |
 | explicit, pending field, valid | accept, save |
 | explicit, other field, valid, field empty | queue a yes/no confirmation (P5) |
 | inferred (any field) | queue a yes/no confirmation |
@@ -414,6 +421,10 @@ For each proposal:
 | explicit, kind = CORRECTION, `raw_text` quoted from message, valid | save the new value, record a `field_corrected` event, show "Updated: <label> is <full value>." + Undo |
 | inferred, or kind ≠ CORRECTION, field already has a value | conflict question (never a silent overwrite) |
 | ambiguous date | queue a two-button date choice |
+
+**Provenance for the pending field.** The model's `explicit`/`inferred` label is not trusted for the question being asked when our own reading settles it. A proposal for the **pending** field is treated as **explicit** when its quote passes the quote check (step 2) and the normalizer turns the quote into exactly one value: one date reading, one valid phone number, one valid email, or an exact option label or id. The model's label only matters when that is not true: an ambiguous date (two buttons, or a yes/no when only one reading is possible), a choice mapped by meaning ("my son" → `child`, always inferred), or a text field (the label stands, so "call me Al" marked inferred is confirmed). Extra values for other fields always get a yes/no confirmation (P5), whatever the label. A proposal marked `must_confirm` by the output check (an email in a "send" message, §10.2) is never treated as explicit.
+
+Examples: "May 4 2004" at the date-of-birth question is saved with no confirmation. "04/05/2004" there gives two date buttons. "Alex Rivera, born May 4 2004" at the name question saves the name and asks a yes/no about the date.
 
 ### 6.4 How the engine handles each kind
 
@@ -504,7 +515,7 @@ Every write for one turn happens in **one transaction**. So a saved answer and i
 | `field_values` | (`intake_id`, `field_id`) unique · `value` · `display_value` · `status` (accepted/confirmed/skipped/deferred/dont_know/unknown_confirmed) · `source` (explicit/inferred/button) · `attempts` · `updated_at` | Current value per field. |
 | `pending_items` | `id` · `intake_id` · `seq` · `kind` (extra/conflict/date_choice) · `field_id` · `payload` JSON | The FIFO queue behind CONFIRMING_EXTRA / RESOLVING_CONFLICT. |
 | `intake_events` | `id` · `intake_id` · `seq` (per intake, unique) · `type` · `field_id` · `payload` JSON · `created_at` | **Append-only.** Types: `created`, `question_shown`, `field_proposed`, `field_accepted`, `field_confirmed`, `field_rejected`, `field_corrected`, `conflict_detected`, `conflict_resolved`, `field_skipped`, `field_deferred`, `field_marked_unknown`, `conflict_unresolved`, `paused`, `resumed`, `distress_shown`, `needs_human`, `unsafe_blocked`, `submitted`, `email_sent`, `email_denied`, `staff_summary_generated`, `benefit_demo_generated`. |
-| `llm_calls` | `id` · `intake_id` · `agent` · `model` · `input_tokens` · `output_tokens` · `latency_ms` · `reply_kind` · `status` (ok/parse_error/timeout/error) · `attempts` · `created_at` | **No prompt or response text**, ever. |
+| `llm_calls` | `id` · `intake_id` · `agent` · `model` · `input_tokens` · `output_tokens` · `latency_ms` · `reply_kind` · `status` (ok/parse_error/timeout/error/no_key) · `attempts` · `created_at` | **No prompt or response text**, ever. |
 | `email_sends` | `id` · `intake_id` · `idempotency_key` (unique) · `status` · `provider` · `created_at` | Idempotency and audit. The recipient is not stored here. It is always re-read from `field_values`. |
 | `staff_outputs` | `id` · `intake_id` · `kind` (staff_summary/benefit_demo) · `content` JSON · `created_at` | Generated drafts. |
 
@@ -580,11 +591,11 @@ There is **no** SOAP endpoint (D1).
 - Maximum `MAX_MESSAGE_CHARS` (default 1000). Longer text gets a polite fixed message and is not sent to the LLM.
 - Strip control characters. Normalize Unicode (NFKC).
 - Crisis keyword check (§6.5).
-- Pattern checks for common injection phrasing ("ignore previous instructions", "system prompt", "send this to", email addresses outside the email question, "other patient", "list all"). A match sets a flag passed to the policy. It does **not** replace structural safety. The real defence is that the agent has no tools and its output can only propose field values.
+- Pattern checks for common injection phrasing ("ignore previous instructions", "system prompt", "send this to", "other patient", "list all"). A match sets a flag passed to the output check and the policy. An email address in a message flagged "send" is not rejected: it is marked inferred, so the user must confirm it with a yes/no question. The recipient is safe regardless, because email goes only to the stored email field and only in SUBMITTED. It does **not** replace structural safety. The real defence is that the agent has no tools and its output can only propose field values.
 
 ### 10.2 Output (`guardrails/output.py`)
 
-- The LLM response must parse into `ReplyUnderstanding`. On a parse error or timeout, retry once. If it still fails, show a fixed "I did not understand. Here is the question again." and log `llm_calls.status`. State does not change.
+- The LLM response must parse into `ReplyUnderstanding`. On a parse error or timeout, retry once. If it still fails, show the fixed "Typing is not working right now" message (§6) and log `llm_calls.status`. State does not change.
 - Proposals are checked as in §6.3 (real field, applicable, `raw_text` really appears in the message, value derived from `raw_text`).
 - An `email` proposal is only accepted when the pending field is `email`, or through a yes/no confirmation. It can never be accepted while the input flag says "send to".
 
@@ -660,15 +671,15 @@ class StaffSummary(BaseModel):
 | Setting | Default | Notes |
 |---|---|---|
 | `GEMINI_MODEL` | `gemini-3.5-flash-lite` | Required to be set. There is no literal anywhere else. |
-| `APP_SECRET` | – | **Required**, at least 32 characters, from `.env`. Derives resume codes (§8). Tests generate a random one per session. |
-| `GOOGLE_API_KEY` | – | Optional. In `v2/backend/.env`, read by `Settings` and passed to the Gemini client explicitly. Without it, buttons work and typed replies get the calm "did not understand" message. `.env.example` (empty values) is committed; `.env` is gitignored; the owner creates `.env`. Only `pytest -m live` reads `.env`. |
+| `APP_SECRET` | – | **Required**, at least 32 characters, from `.env`. Derives resume codes (§8). **Must stay the same** once intakes exist: changing it invalidates every resume code already given out. Tests generate a random one per session. |
+| `GOOGLE_API_KEY` | – | Optional. In `v2/backend/.env`, read by `Settings` and passed to the Gemini client explicitly. Without it (or if it is blank), no model is called: buttons work and typed replies get the fixed "Typing is not working right now" message, and `llm_calls.status` is `no_key`. `.env.example` (empty values) is committed; `.env` is gitignored; the owner creates `.env`. Only `pytest -m live` reads `.env`. |
 | `SYNTHETIC_ONLY` | `true` | Validator: must be `true`, or startup fails. |
 | `DATABASE_URL` | `sqlite:///var/intake.db` | Relative to backend dir, gitignored. |
 | `EMAIL_PROVIDER` | `console` | `console` / `smtp` |
 | `REGION` | `US` | Selects the default phone-parsing region and the per-region content file `app/content/regions/<region>.toml` (crisis and emergency text: 911, 988). Crisis text lives only in these files, never in code. Startup fails if the file for `REGION` is missing. |
 | `MAX_MESSAGE_CHARS` | 1000 | |
 | `MAX_FIELD_ATTEMPTS` | 3 | |
-| `LLM_TIMEOUT_S` | 15 | |
+| `LLM_TIMEOUT_S` | 8 | Per attempt, one retry: worst case about 16 s. |
 
 ---
 
@@ -776,6 +787,7 @@ Other safety tests (in `tests/safety`):
 | Crisis cases reaching NEEDS_HUMAN | 100 % |
 | Unsafe actions accepted (state change or side effect caused by injection) | **0** |
 | Tokens and latency per intake and per turn | from `llm_calls` |
+| Latency per LLM call: p50 and p95 | from `llm_calls.latency_ms`, overall and per reply kind; timeouts and retries counted separately |
 | LLM calls avoided by buttons | informational |
 
 The goal is **lower load per turn and zero repeated questions**. It is not fewer total questions.
@@ -803,7 +815,7 @@ The goal is **lower load per turn and zero repeated questions**. It is not fewer
 | 4 | Workflow engine + persistence: states, transitions, events, pending queue, pause/resume. Full-flow tests with a fake agent. |
 | 5 | Understanding agent (ADK + Gemini structured output), guardrails, policy engine, safety tests. Check the ADK API and model list first. |
 | 6 | API layer + services: email (idempotent, console default), staff summary, benefit demo. |
-| 7 | Frontend, then accessibility pass (axe, keyboard walkthrough, grade check). |
+| 7 | Frontend, then accessibility pass (axe, keyboard walkthrough, grade check). While a typed reply is being read, show a calm status "Reading your answer…" after 1 second (announced through `aria-live="polite"`, no spinner countdown, no timer), so the user never faces a silent wait. |
 | 8 | Eval harness, V1 baseline, `docs/EVAL_RESULTS.md`. |
 | Final | README rewrite. |
 

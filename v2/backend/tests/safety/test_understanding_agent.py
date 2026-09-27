@@ -5,14 +5,20 @@ from pathlib import Path
 
 import pytest
 
-from app.agents.understanding_agent import AdkUnderstander, build_agent
+from app.agents.understanding_agent import (
+    AdkUnderstander,
+    NoKeyUnderstander,
+    build_agent,
+    build_understander,
+)
+from app.config import Settings
 from app.domain.types import InputType
 from app.workflow.understanding import (
     FieldBrief,
     ReplyKind,
     UnderstandingContext,
 )
-from tests.agent_helpers import SLEEP, ScriptedLlm, request_text
+from tests.agent_helpers import RAISE, SLEEP, ScriptedLlm, request_text
 
 TEST_TIMEOUT = 30.0  # generous: the first ADK call in a cold CI process can be slow
 
@@ -83,6 +89,33 @@ def test_timeout_fails_closed() -> None:
     reply = AdkUnderstander(llm, timeout_s=0.2).understand("Alex Rivera", CONTEXT)
     assert reply.understanding is None
     assert reply.call.status == "timeout"
+
+
+def test_one_understander_serves_many_calls_on_one_loop() -> None:
+    """Built once and reused: calls after a timeout still work (no per-call event loop)."""
+    llm = ScriptedLlm().reply_with(GOOD, SLEEP, SLEEP, GOOD, GOOD)
+    understander = AdkUnderstander(llm, timeout_s=2.0)
+    try:
+        replies = [understander.understand("Alex Rivera", CONTEXT) for _ in range(3)]
+    finally:
+        understander.close()
+    assert [r.call.status for r in replies] == ["ok", "timeout", "ok"]
+
+
+def test_api_error_fails_closed_without_retry() -> None:
+    llm = ScriptedLlm().reply_with(RAISE, GOOD)
+    reply = AdkUnderstander(llm, timeout_s=TEST_TIMEOUT).understand("Alex Rivera", CONTEXT)
+    assert reply.understanding is None
+    assert (reply.call.status, reply.call.attempts) == ("error", 1)
+
+
+@pytest.mark.parametrize("key", [None, "", "   "])
+def test_no_key_never_calls_the_model(key: str | None) -> None:
+    understander = build_understander(Settings(google_api_key=key))
+    assert isinstance(understander, NoKeyUnderstander)
+    reply = understander.understand("Alex Rivera", CONTEXT)
+    assert reply.understanding is None
+    assert reply.call.status == "no_key"
 
 
 def test_unknown_kind_from_model_is_a_parse_error() -> None:

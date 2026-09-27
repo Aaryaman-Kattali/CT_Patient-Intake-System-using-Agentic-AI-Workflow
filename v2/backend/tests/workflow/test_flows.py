@@ -16,6 +16,7 @@ from tests.workflow_helpers import (
     question_marks,
     understood,
 )
+from tests.workflow_helpers import advance_to as _to
 
 A = ReplyKind.ANSWER
 
@@ -23,19 +24,6 @@ A = ReplyKind.ANSWER
 @pytest.fixture
 def d(tmp_path: Path) -> Driver:
     return Driver(make_service(tmp_path / "intake.db"))
-
-
-def _to(d: Driver, field_id: str, book: dict[str, str] = FI_SELF_BOOK) -> None:
-    """Answer from the book until the given field's question is showing."""
-    if d.view.state is State.GREETING:
-        d.send(c.Start())
-    for _ in range(30):
-        q = d.view.question
-        assert q is not None, d.view
-        if q.field_id == field_id and q.kind == "field":
-            return
-        d.answer(book[q.field_id])
-    raise AssertionError(f"never reached {field_id}")
 
 
 # --- whole paths --------------------------------------------------------------
@@ -233,6 +221,69 @@ def test_quoted_correction_saves_and_offers_undo(d: Driver) -> None:
     view = d.send(c.Undo())
     assert view.acknowledgement == "Changed back: date of birth is May 4, 2004."
     assert d.service._repo.load(d.id).answers["date_of_birth"].value == "2004-05-04"  # type: ignore[union-attr]
+
+
+# --- provenance for the question being asked (spec §6.3 step 5) --------------------------
+
+
+def _saved(d: Driver, field_id: str) -> tuple[str | None, str | None]:
+    snap = d.service._repo.load(d.id)
+    assert snap is not None
+    state = snap.answers.get(field_id)
+    return (state.value, state.source.value if state.source else None) if state else (None, None)
+
+
+def test_one_date_reading_at_date_question_is_saved_even_if_labelled_inferred(
+    d: Driver,
+) -> None:
+    _to(d, "date_of_birth")
+    view = d.text("May 4 2004", understood(A, ("date_of_birth", "May 4 2004", "inferred")))
+    assert view.acknowledgement == "Saved."
+    assert view.question is not None
+    assert (view.question.kind, view.question.field_id) == ("field", "preferred_contact_method")
+    assert _saved(d, "date_of_birth") == ("2004-05-04", "explicit")
+
+
+def test_two_date_readings_at_date_question_ask_with_two_buttons(d: Driver) -> None:
+    _to(d, "date_of_birth")
+    view = d.text("04/05/2004", understood(A, ("date_of_birth", "04/05/2004", "inferred")))
+    assert view.question is not None
+    assert view.question.kind == "date_choice"
+    assert [o.label for o in view.question.options] == ["April 5, 2004", "May 4, 2004"]
+    assert _saved(d, "date_of_birth") == (None, None)
+
+
+def test_name_saved_and_extra_date_confirmed_even_if_labelled_explicit(d: Driver) -> None:
+    _to(d, "full_name")
+    u = understood(A, ("full_name", "Alex Rivera"), ("date_of_birth", "May 4 2004", "explicit"))
+    view = d.text("Alex Rivera, born May 4 2004", u)
+    assert _saved(d, "full_name") == ("Alex Rivera", "explicit")
+    assert view.question is not None
+    assert (view.question.kind, view.question.field_id) == ("confirm_extra", "date_of_birth")
+    assert _saved(d, "date_of_birth") == (None, None)
+
+
+@pytest.mark.parametrize(
+    ("field_id", "typed", "stored"),
+    [
+        ("phone", "202-555-0100", "+12025550100"),
+        ("email", "alex@example.com", "alex@example.com"),
+        ("preferred_contact_method", "Email", "email"),
+    ],
+)
+def test_one_reading_at_asked_question_is_explicit(
+    d: Driver, field_id: str, typed: str, stored: str
+) -> None:
+    _to(d, field_id)
+    d.text(typed, understood(A, (field_id, typed, "inferred")))
+    assert _saved(d, field_id) == (stored, "explicit")
+
+
+def test_text_answer_keeps_the_model_label(d: Driver) -> None:
+    _to(d, "full_name")
+    view = d.text("call me Al", understood(A, ("full_name", "Al", "inferred")))
+    assert view.question is not None
+    assert (view.question.kind, view.question.field_id) == ("confirm_value", "full_name")
 
 
 def test_ambiguous_date_asks_with_two_buttons(d: Driver) -> None:

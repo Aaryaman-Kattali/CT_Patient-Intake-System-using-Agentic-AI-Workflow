@@ -12,6 +12,7 @@ from app.services.persistence import IntakeRepository, create_db_engine
 from app.workflow import commands as c
 from app.workflow.engine import Applied, EngineConfig, handle
 from app.workflow.snapshot import EventRecord, Snapshot
+from app.workflow.states import State
 from app.workflow.understanding import (
     AgentReply,
     FieldProposal,
@@ -183,6 +184,19 @@ class Driver:
             and e.field_id == field_id
             and e.payload["kind"] == "field"
         )
+
+
+def advance_to(d: Driver, field_id: str, book: dict[str, str] = FI_SELF_BOOK) -> None:
+    """Answer from the book until the given field's question is showing."""
+    if d.view.state is State.GREETING:
+        d.send(c.Start())
+    for _ in range(30):
+        q = d.view.question
+        assert q is not None, d.view
+        if q.field_id == field_id and q.kind == "field":
+            return
+        d.answer(book[q.field_id])
+    raise AssertionError(f"never reached {field_id}")
 
 
 class EngineHarness:

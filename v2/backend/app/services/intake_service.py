@@ -14,6 +14,7 @@ from app.domain import templates as t
 from app.domain.fields import FieldState
 from app.domain.registry import get_field
 from app.domain.requirements import applicable_fields
+from app.domain.types import InputType
 from app.guardrails import input as guard_input
 from app.guardrails import output as guard_output
 from app.guardrails import redaction
@@ -205,8 +206,8 @@ class IntakeService:
                 "reply_kind": u.kind.value if u else None,
             },
         )
-        if u is None:  # parse error, timeout or outage: change nothing, ask again calmly
-            notes = Notes(info=[t.NOT_UNDERSTOOD])
+        if u is None:  # no key, timeout, outage or unreadable output: not the user's mistake
+            notes = Notes(info=list(_unavailable_text(snap)))
             return TurnResult("rejected", self._render(snap, notes), "llm_" + reply.call.status)
         checked = guard_output.check(screened.text, u, context, screened.flags)
         events += [
@@ -214,6 +215,15 @@ class IntakeService:
             for f, r in checked.dropped
         ]
         return _Read(screened.text, checked.understanding, tuple(events))
+
+
+def _unavailable_text(snap: Snapshot) -> tuple[str, ...]:
+    """Point to the buttons only when the current question has them."""
+    q = current_question(snap)
+    has_buttons = isinstance(q, QueueQuestion) or (
+        isinstance(q, FieldQuestion) and q.field.input_type is InputType.CHOICE
+    )
+    return t.LLM_UNAVAILABLE_BUTTONS if has_buttons else t.LLM_UNAVAILABLE_TYPED
 
 
 def _brief(field_id: str) -> FieldBrief:

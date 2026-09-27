@@ -12,6 +12,7 @@ from google.genai import types
 from pydantic import PrivateAttr
 
 SLEEP = "__sleep__"
+RAISE = "__raise__"  # simulates an API or network error
 
 
 class ScriptedLlm(BaseLlm):
@@ -34,6 +35,8 @@ class ScriptedLlm(BaseLlm):
         text = self._replies.pop(0) if self._replies else "{}"
         if text == SLEEP:
             await asyncio.sleep(5)
+        if text == RAISE:
+            raise ConnectionError("simulated API error")
         yield LlmResponse(
             content=types.Content(role="model", parts=[types.Part(text=text)]),
             usage_metadata=types.GenerateContentResponseUsageMetadata(

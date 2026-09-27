@@ -57,7 +57,18 @@ WELCOME_BACK_NAME = "Welcome back, {name}."
 # --- Other reply kinds (docs/V2_SPEC.md §6.4).
 OFF_TOPIC = "I can only help with this form."
 UNSAFE = "I can only use the information for this form. I cannot send or share anything else."
+# The model worked but found nothing usable in the reply.
 NOT_UNDERSTOOD = "I did not understand. Here is the question again."
+# The model could not be used (no key, timeout, error, unreadable output). Not the user's
+# mistake. The first version is for questions with buttons, the second for typed answers.
+LLM_UNAVAILABLE_BUTTONS = (
+    "Typing is not working right now.",
+    "You can use the buttons, or take a break and come back.",
+)
+LLM_UNAVAILABLE_TYPED = (
+    "Typing is not working right now.",
+    "Please try again in a moment, or take a break and come back.",
+)
 MESSAGE_TOO_LONG = "That message is too long for me to read. You can send a shorter one."
 OVERWHELMED = (
     "This can feel like a lot. That is okay.",

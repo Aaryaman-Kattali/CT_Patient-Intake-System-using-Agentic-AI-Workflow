@@ -483,7 +483,7 @@ def _answer(turn: _Turn, q: CurrentQuestion | None, u: ReplyUnderstanding) -> Re
     extras = [p for p in u.proposals if p.field_id != fld.id]
     changed = False
     if main:
-        reading = _interpret(fld, main[0], turn.config)
+        reading = _interpret(fld, main[0], turn.config, pending=True)
         if reading is None:  # the agent's value does not match its own quote
             turn.event("proposal_rejected", fld.id, reason="value_not_in_quote")
         elif isinstance(reading[0], Retry):
@@ -509,18 +509,32 @@ def _order(field_id: str) -> int:
 Reading = tuple[ParseResult, Source]
 
 
-def _interpret(fld: FieldDef, p: FieldProposal, config: EngineConfig) -> Reading | None:
+_ONE_READING_TYPES = frozenset({InputType.DATE, InputType.PHONE, InputType.EMAIL})
+
+
+def _interpret(
+    fld: FieldDef, p: FieldProposal, config: EngineConfig, *, pending: bool
+) -> Reading | None:
     """Derive the value from the quoted text with our own parsers (spec §6.3 step 3).
 
     Returns None when the agent's value disagrees with its own quote (hallucination).
     """
     stated = Source.EXPLICIT if p.source == "explicit" else Source.INFERRED
     if fld.input_type is InputType.CHOICE:
-        return _interpret_choice(fld, p, stated)
+        return _interpret_choice(fld, p, stated, pending=pending)
     parsed = parse_answer(fld, p.raw_text, today=config.today, region=config.region)
     if isinstance(parsed, Parsed) and not _agrees(fld, p, parsed, config):
         return None
-    return parsed, stated
+    one_reading = isinstance(parsed, Parsed) and fld.input_type in _ONE_READING_TYPES
+    return parsed, _provenance(p, stated, pending=pending, one_reading=one_reading)
+
+
+def _provenance(p: FieldProposal, stated: Source, *, pending: bool, one_reading: bool) -> Source:
+    """Spec §6.3 step 5: for the question being asked, a quote that our normalizer reads as
+    exactly one value is explicit, whatever the model's label. Otherwise the label stands."""
+    if pending and one_reading and not p.must_confirm:
+        return Source.EXPLICIT
+    return stated
 
 
 def _agrees(fld: FieldDef, p: FieldProposal, parsed: Parsed, config: EngineConfig) -> bool:
@@ -533,10 +547,11 @@ def _agrees(fld: FieldDef, p: FieldProposal, parsed: Parsed, config: EngineConfi
     return True  # e.g. the LLM wrote an ISO date we cannot re-read: the quote decides
 
 
-def _interpret_choice(fld: FieldDef, p: FieldProposal, stated: Source) -> Reading:
+def _interpret_choice(fld: FieldDef, p: FieldProposal, stated: Source, *, pending: bool) -> Reading:
     exact = match_option(fld, p.raw_text)
     if exact is not None and not exact.free_text and exact.special is None:
-        return Parsed(exact.id, exact.label), stated  # the user typed the option itself
+        source = _provenance(p, stated, pending=pending, one_reading=True)
+        return Parsed(exact.id, exact.label), source  # the user typed the option itself
     option = fld.option(p.value)
     if option is None or option.special is not None:
         return Retry("choose_option"), Source.INFERRED
@@ -572,7 +587,7 @@ def _apply_extra(turn: _Turn, p: FieldProposal, kind: ReplyKind) -> bool:
         return False
     if any(item.field_id == fld.id for item in turn.queue):
         return False
-    reading = _interpret(fld, p, turn.config)
+    reading = _interpret(fld, p, turn.config, pending=False)
     if reading is None:
         turn.event("proposal_dropped", fld.id, reason="value_not_in_quote")
         return False

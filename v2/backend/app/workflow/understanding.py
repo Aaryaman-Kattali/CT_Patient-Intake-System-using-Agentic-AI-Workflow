@@ -31,6 +31,9 @@ class FieldProposal(BaseModel):
     raw_text: str  # exact span from the user's message
     value: str  # the agent's reading; the stored value is re-derived from raw_text
     source: Literal["explicit", "inferred"]
+    # Set only by the output check (e.g. an email in a "send" message). The engine never
+    # treats such a proposal as explicit, whatever the quote says.
+    must_confirm: bool = False
 
 
 class ReplyUnderstanding(BaseModel):
@@ -70,7 +73,7 @@ class LlmCallInfo(BaseModel):
     input_tokens: int | None = None
     output_tokens: int | None = None
     latency_ms: int
-    status: Literal["ok", "parse_error", "timeout", "error"]
+    status: Literal["ok", "parse_error", "timeout", "error", "no_key"]
     attempts: int = 1
 
 

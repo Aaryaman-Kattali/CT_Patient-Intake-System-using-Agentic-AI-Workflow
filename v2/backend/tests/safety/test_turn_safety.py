@@ -7,11 +7,21 @@ from pathlib import Path
 
 import pytest
 
+from app.agents.understanding_agent import AdkUnderstander, NoKeyUnderstander
+from app.domain.types import Source
 from app.logging_setup import configure_logging
 from app.workflow import commands as c
 from app.workflow.states import State
-from app.workflow.understanding import AgentReply, ReplyKind, UnderstandingContext
-from tests.workflow_helpers import FI_CHILD_BOOK, Driver, FakeUnderstander, make_service, understood
+from app.workflow.understanding import AgentReply, ReplyKind, Understander, UnderstandingContext
+from tests.agent_helpers import RAISE, SLEEP, ScriptedLlm
+from tests.workflow_helpers import (
+    FI_CHILD_BOOK,
+    Driver,
+    FakeUnderstander,
+    advance_to,
+    make_service,
+    understood,
+)
 
 A = ReplyKind.ANSWER
 
@@ -45,10 +55,35 @@ def test_injection_cannot_change_state_or_recipient(d: Driver) -> None:
     assert after is not None
     assert "email" not in after.answers
     assert after.state is not State.SUBMITTED
-    assert view.question is None or view.question.field_id != "email"
+    # The address is never saved as given: it becomes a yes/no question, marked inferred.
+    assert view.question is not None
+    assert (view.question.kind, view.question.field_id) == ("confirm_extra", "email")
     events = d.events()
     assert any(e.type == "input_flagged" for e in events)
-    assert any(e.type == "proposal_rejected" and e.field_id == "email" for e in events)
+    assert any(
+        e.type == "field_proposed" and e.field_id == "email" and e.payload["source"] == "inferred"
+        for e in events
+    )
+    d.choose("no")
+    final = d.service._repo.load(d.id)
+    assert final is not None
+    assert "email" not in final.answers
+
+
+def test_email_in_a_send_message_is_confirmed_not_rejected(d: Driver) -> None:
+    advance_to(d, "email")
+    message = "You can send things to alex@example.com"
+    view = d.text(message, understood(A, ("email", "alex@example.com")))
+    assert view.question is not None
+    assert (view.question.kind, view.question.field_id) == ("confirm_value", "email")
+    snap = d.service._repo.load(d.id)
+    assert snap is not None
+    assert not (snap.answers.get("email") and snap.answers["email"].answered)
+    d.choose("yes")
+    snap = d.service._repo.load(d.id)
+    assert snap is not None
+    email = snap.answers["email"]
+    assert (email.value, email.source) == ("alex@example.com", Source.INFERRED)
 
 
 def test_unsafe_reply_changes_nothing(d: Driver) -> None:
@@ -108,14 +143,66 @@ def test_crisis_keywords_bypass_llm(d: Driver) -> None:
     assert any(e.type == "crisis_keyword_matched" for e in d.events())
 
 
-def test_llm_parse_failure_changes_nothing(d: Driver) -> None:
+UNAVAILABLE_TYPED = (
+    "Typing is not working right now.",
+    "Please try again in a moment, or take a break and come back.",
+)
+UNAVAILABLE_BUTTONS = (
+    "Typing is not working right now.",
+    "You can use the buttons, or take a break and come back.",
+)
+NOT_UNDERSTOOD = ("I did not understand. Here is the question again.",)
+
+
+def _failing(status: str) -> Understander:
+    if status == "no_key":
+        return NoKeyUnderstander("gemini-test")
+    scripts = {"timeout": (SLEEP, SLEEP), "error": (RAISE,), "parse_error": ("x", "x")}
+    script: tuple[str, ...] = scripts[status]
+    return AdkUnderstander(ScriptedLlm().reply_with(*script), timeout_s=0.2)
+
+
+@pytest.mark.parametrize("status", ["no_key", "timeout", "error", "parse_error"])
+def test_llm_unavailable_gets_a_calm_message_and_changes_nothing(d: Driver, status: str) -> None:
     _at_full_name(d)
     before = d.service._repo.load(d.id)
-    d.fake.queued.append(None)  # the agent failed (parse error / timeout / outage)
-    view = d.text("Alex Rivera", expect="rejected")
-    assert view.info == ("I did not understand. Here is the question again.",)
-    after = d.service._repo.load(d.id)
-    assert before == after
+    d.service._understander = _failing(status)  # test-only access
+    result = d.service.handle(d.id, d.view.turn, c.Text(text="Alex Rivera"))
+    assert (result.status, result.reason) == ("rejected", f"llm_{status}")
+    assert result.view is not None
+    assert (
+        result.view.info == UNAVAILABLE_TYPED
+    )  # not "I did not understand": not the user's mistake
+    assert result.view.question is not None
+    assert result.view.question.field_id == "full_name"
+    assert d.service._repo.load(d.id) == before
+    assert d.service._repo.llm_calls(d.id)[-1].status == status
+
+
+def test_llm_unavailable_at_a_choice_question_points_to_the_buttons(d: Driver) -> None:
+    d.send(c.Start())  # the first question (intake type) has buttons
+    d.service._understander = NoKeyUnderstander("gemini-test")  # test-only access
+    view = d.text("a family question", expect="rejected")
+    assert view.info == UNAVAILABLE_BUTTONS
+
+
+def test_llm_unavailable_at_a_yes_no_question_points_to_the_buttons(d: Driver) -> None:
+    advance_to(d, "full_name")
+    d.text(
+        "Alex Rivera, May 4 2004",
+        understood(A, ("full_name", "Alex Rivera"), ("date_of_birth", "May 4 2004")),
+    )
+    assert d.view.question is not None
+    assert d.view.question.kind == "confirm_extra"
+    d.service._understander = NoKeyUnderstander("gemini-test")
+    view = d.text("maybe, not sure what you mean", expect="rejected")
+    assert view.info == UNAVAILABLE_BUTTONS
+
+
+def test_model_worked_but_found_nothing_usable(d: Driver) -> None:
+    _at_full_name(d)
+    view = d.text("hmm", understood(A))
+    assert view.info == NOT_UNDERSTOOD
 
 
 def test_message_too_long_not_sent_to_llm(d: Driver) -> None:

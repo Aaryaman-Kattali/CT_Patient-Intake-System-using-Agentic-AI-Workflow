@@ -7,6 +7,7 @@ values) and returns a proposal. The application validates and decides (docs/V2_S
 import asyncio
 import json
 import logging
+import threading
 import time
 import uuid
 from enum import StrEnum
@@ -34,7 +35,7 @@ from app.workflow.understanding import (
 log = logging.getLogger(__name__)
 
 APP_NAME = "intake_understanding"
-CallStatus = Literal["ok", "parse_error", "timeout", "error"]
+CallStatus = Literal["ok", "parse_error", "timeout", "error", "no_key"]
 MAX_ATTEMPTS = 2  # one retry on a parse error or timeout (spec §10.2)
 
 
@@ -111,17 +112,28 @@ def build_agent(model: BaseLlm | str) -> LlmAgent:
 
 
 def gemini_model(settings: Settings) -> BaseLlm:
-    key = settings.google_api_key.get_secret_value() if settings.google_api_key else None
-    return Gemini(model=settings.gemini_model, client_kwargs={"api_key": key} if key else {})
+    if settings.google_api_key is None:
+        raise ValueError("GOOGLE_API_KEY is not set; use NoKeyUnderstander")
+    key = settings.google_api_key.get_secret_value()
+    return Gemini(model=settings.gemini_model, client_kwargs={"api_key": key})
 
 
 class AdkUnderstander:
+    """Built once. All calls run on one long-lived event loop in a background thread, so the
+    Gemini client's connections stay valid between calls (a new loop per call breaks them).
+    """
+
     def __init__(self, model: BaseLlm, timeout_s: float) -> None:
         self._model_name = model.model
         self._timeout_s = timeout_s
         self._sessions = InMemorySessionService()
         self.agent = build_agent(model)
         self._runner = Runner(app_name=APP_NAME, agent=self.agent, session_service=self._sessions)
+        self._loop = asyncio.new_event_loop()
+        threading.Thread(target=self._loop.run_forever, name="understanding", daemon=True).start()
+
+    def close(self) -> None:
+        self._loop.call_soon_threadsafe(self._loop.stop)
 
     def understand(self, message: str, context: UnderstandingContext) -> AgentReply:
         prompt = build_prompt(message, context)
@@ -130,7 +142,8 @@ class AdkUnderstander:
         usage: tuple[int | None, int | None] = (None, None)
         for attempt in range(1, MAX_ATTEMPTS + 1):
             try:
-                text, usage = asyncio.run(asyncio.wait_for(self._run(prompt), self._timeout_s))
+                future = asyncio.run_coroutine_threadsafe(self._run(prompt), self._loop)
+                text, usage = future.result()
                 parsed = LlmReply.model_validate_json(text).to_understanding()
             except TimeoutError:
                 status = "timeout"
@@ -162,29 +175,50 @@ class AdkUnderstander:
         )
 
     async def _run(self, prompt: str) -> tuple[str, tuple[int | None, int | None]]:
-        """One stateless run: a fresh session, deleted afterwards."""
+        """One stateless run: a fresh session, deleted afterwards. Only the model call is
+        timed out; the in-memory session setup is not."""
         session_id = uuid.uuid4().hex
         await self._sessions.create_session(
             app_name=APP_NAME, user_id="intake", session_id=session_id
         )
-        text = ""
-        usage: tuple[int | None, int | None] = (None, None)
         try:
-            content = types.Content(role="user", parts=[types.Part(text=prompt)])
-            async for event in self._runner.run_async(
-                user_id="intake", session_id=session_id, new_message=content
-            ):
-                if event.usage_metadata:
-                    meta = event.usage_metadata
-                    usage = (meta.prompt_token_count, meta.candidates_token_count)
-                if event.is_final_response() and event.content and event.content.parts:
-                    text = "".join(p.text or "" for p in event.content.parts if not p.thought)
+            return await asyncio.wait_for(self._call(session_id, prompt), self._timeout_s)
         finally:
             await self._sessions.delete_session(
                 app_name=APP_NAME, user_id="intake", session_id=session_id
             )
+
+    async def _call(
+        self, session_id: str, prompt: str
+    ) -> tuple[str, tuple[int | None, int | None]]:
+        text = ""
+        usage: tuple[int | None, int | None] = (None, None)
+        content = types.Content(role="user", parts=[types.Part(text=prompt)])
+        async for event in self._runner.run_async(
+            user_id="intake", session_id=session_id, new_message=content
+        ):
+            if event.usage_metadata:
+                meta = event.usage_metadata
+                usage = (meta.prompt_token_count, meta.candidates_token_count)
+            if event.is_final_response() and event.content and event.content.parts:
+                text = "".join(p.text or "" for p in event.content.parts if not p.thought)
         return text, usage
 
 
-def build_understander(settings: Settings) -> AdkUnderstander:
+class NoKeyUnderstander:
+    """Used when GOOGLE_API_KEY is not set: never calls the network, always fails closed."""
+
+    def __init__(self, model_name: str) -> None:
+        self._model_name = model_name
+
+    def understand(self, message: str, context: UnderstandingContext) -> AgentReply:
+        return AgentReply(
+            understanding=None,
+            call=LlmCallInfo(model=self._model_name, latency_ms=0, status="no_key", attempts=0),
+        )
+
+
+def build_understander(settings: Settings) -> AdkUnderstander | NoKeyUnderstander:
+    if settings.google_api_key is None:
+        return NoKeyUnderstander(settings.gemini_model)
     return AdkUnderstander(gemini_model(settings), timeout_s=settings.llm_timeout_s)
