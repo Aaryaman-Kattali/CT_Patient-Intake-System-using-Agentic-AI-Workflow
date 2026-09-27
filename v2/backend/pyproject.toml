@@ -25,6 +25,7 @@ dev = [
     "pre-commit==4.6.2",
     "textstat==0.7.13",
     "httpx2==2.13.1",
+    "tzdata>=2026.4",
 ]
 
 [build-system]
