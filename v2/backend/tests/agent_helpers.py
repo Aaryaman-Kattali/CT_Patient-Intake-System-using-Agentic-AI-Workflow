@@ -90,11 +90,13 @@ def make_understander(
     deadline_s: float = 30.0,  # generous: the first ADK call in a cold CI process can be slow
     hedge_after_s: float | None = None,  # None: never hedge
     retry_delay_s: float = 0.01,
+    cooldown_after_429_s: float = 60.0,
 ) -> AdkUnderstander:
     policy = HedgePolicy(
         deadline_s=deadline_s,
         hedge_after_s=deadline_s if hedge_after_s is None else hedge_after_s,
         retry_delay_s=retry_delay_s,
+        cooldown_after_429_s=cooldown_after_429_s,
     )
     return AdkUnderstander(llm, policy)
 

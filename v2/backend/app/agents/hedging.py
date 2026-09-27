@@ -7,10 +7,13 @@ when the first is slow, and a small retry budget. Plain asyncio; knows nothing a
 - Unreadable output: one more attempt, if time remains.
 - Transient API error (429, 5xx): one retry after about 1 s (with jitter), if time remains.
   Any other error ends the call at once: an identical request would fail the same way.
+- After a 429, no hedging for `cooldown_after_429_s`: a second request would only add load
+  while the quota is exhausted. The call records that the hedge was suppressed.
 """
 
 import asyncio
 import random
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -37,6 +40,21 @@ class HedgePolicy:
     deadline_s: float
     hedge_after_s: float
     retry_delay_s: float = 1.0
+    cooldown_after_429_s: float = 60.0
+
+
+class Cooldown:
+    """Remembers the last 429 for this process (one understander per app)."""
+
+    def __init__(self, seconds: float) -> None:
+        self._seconds = seconds
+        self._last: float | None = None
+
+    def start(self) -> None:
+        self._last = time.monotonic()
+
+    def active(self) -> bool:
+        return self._last is not None and time.monotonic() - self._last < self._seconds
 
 
 @dataclass(frozen=True)
@@ -46,29 +64,37 @@ class HedgeOutcome[T]:
     attempts: int
     hedged: bool
     winner: int | None = None  # 1 = first request, 2 = the next one started, ...
+    hedge_suppressed: bool = False  # the hedge was due but skipped after a recent 429
     usage: Usage = (None, None)
     error_class: str | None = None
 
 
 async def hedged_call[T](
-    attempt: Callable[[], Awaitable[AttemptResult[T]]], policy: HedgePolicy
+    attempt: Callable[[], Awaitable[AttemptResult[T]]],
+    policy: HedgePolicy,
+    may_hedge: Callable[[], bool] = lambda: True,
 ) -> HedgeOutcome[T]:
-    return await _Hedge(attempt, policy).run()
+    return await _Hedge(attempt, policy, may_hedge).run()
 
 
 class _Hedge[T]:
     def __init__(
-        self, attempt: Callable[[], Awaitable[AttemptResult[T]]], policy: HedgePolicy
+        self,
+        attempt: Callable[[], Awaitable[AttemptResult[T]]],
+        policy: HedgePolicy,
+        may_hedge: Callable[[], bool],
     ) -> None:
         self._attempt = attempt
         self._policy = policy
+        self._may_hedge = may_hedge
         self._loop = asyncio.get_running_loop()
         started = self._loop.time()
         self._deadline = started + policy.deadline_s
         self._hedge_at = started + policy.hedge_after_s
         self._tasks: dict[asyncio.Task[AttemptResult[T]], int] = {}
         self._attempts = 0
-        self._hedged = self._retried_parse = self._retried_error = False
+        self._hedge_due = self._hedged = self._suppressed = False
+        self._retried_parse = self._retried_error = False
         self._last: AttemptResult[T] | None = None
 
     async def run(self) -> HedgeOutcome[T]:
@@ -80,7 +106,7 @@ class _Hedge[T]:
 
     async def _wait_for_winner(self) -> HedgeOutcome[T]:
         while self._tasks:
-            wake = self._deadline if self._hedged else min(self._hedge_at, self._deadline)
+            wake = self._deadline if self._hedge_due else min(self._hedge_at, self._deadline)
             done, _ = await asyncio.wait(
                 self._tasks,
                 timeout=max(0.0, wake - self._loop.time()),
@@ -89,8 +115,7 @@ class _Hedge[T]:
             if not done:
                 if self._loop.time() >= self._deadline:
                     return self._fail("timeout")
-                self._hedged = True
-                self._launch()
+                self._hedge()
                 continue
             for task in done:
                 number = self._tasks.pop(task)
@@ -103,6 +128,14 @@ class _Hedge[T]:
             if not self._tasks:
                 self._retry()
         return self._fail(self._last.failure if self._last and self._last.failure else "error")
+
+    def _hedge(self) -> None:
+        self._hedge_due = True
+        if self._may_hedge():
+            self._hedged = True
+            self._launch()
+        else:
+            self._suppressed = True
 
     def _retry(self) -> None:
         last = self._last
@@ -135,7 +168,15 @@ class _Hedge[T]:
         self._tasks.clear()
 
     def _win(self, result: AttemptResult[T], number: int) -> HedgeOutcome[T]:
-        return HedgeOutcome(result.value, "ok", self._attempts, self._hedged, number, result.usage)
+        return HedgeOutcome(
+            result.value,
+            "ok",
+            self._attempts,
+            self._hedged,
+            number,
+            self._suppressed,
+            result.usage,
+        )
 
     def _fail(self, status: Status) -> HedgeOutcome[T]:
         last = self._last
@@ -144,6 +185,7 @@ class _Hedge[T]:
             status,
             self._attempts,
             self._hedged,
+            hedge_suppressed=self._suppressed,
             usage=last.usage if last else (None, None),
             error_class=last.error_class if last else None,
         )

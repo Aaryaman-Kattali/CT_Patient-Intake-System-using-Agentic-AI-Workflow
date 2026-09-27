@@ -77,6 +77,7 @@ class LlmCallInfo(BaseModel):
     attempts: int = 1  # requests started, including the hedge and any retry
     hedged: bool = False  # a second identical request was started
     winner: int | None = None  # which request gave the result (1 = the first)
+    hedge_suppressed: bool = False  # the hedge was due but skipped after a recent 429
     error_class: str | None = None  # e.g. "ClientError:429", for failures
 
 

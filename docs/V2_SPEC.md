@@ -176,10 +176,11 @@ A single turn goes like this:
 - `google-genai` reads `GOOGLE_API_KEY` (then `GEMINI_API_KEY`) from the **process environment**. Our settings read `.env` into the `Settings` object only, so the key is passed to the client explicitly: `Gemini(model=GEMINI_MODEL, client_kwargs={"api_key": ...})`. Nothing is written to `os.environ`.
 - **Hedged request, one deadline per turn** (`app/agents/hedging.py`):
   - Overall deadline `LLM_DEADLINE_S` = 12. Nothing runs past it.
-  - If there is no reply after `LLM_HEDGE_AFTER_S` = 3, one second identical request is started. The first valid result wins and the other request is cancelled. A cancelled request's result is never used, and its ADK session is still deleted.
+  - If there is no reply after `LLM_HEDGE_AFTER_S` = 4, one second identical request is started. The first valid result wins and the other request is cancelled. A cancelled request's result is never used, and its ADK session is still deleted.
   - Unreadable output: one more attempt, if time remains within the deadline.
   - API errors: retried only when transient (429 and 5xx), once, after about 1 s with jitter (1.0 to 1.5 s), and only if that fits within the deadline. Other 4xx errors and non-API errors are not retried: an identical request would fail the same way.
-  - `llm_calls` records `attempts` (requests started), `hedged`, `winner` (which request gave the result, 1 = the first) and `error_class` (e.g. `ClientError:429`) for failures.
+  - After a 429, hedging is skipped for 60 s (process-level, in memory): a second request would only add load while the quota is exhausted. The call records `hedge_suppressed` when the hedge was due but skipped.
+  - `llm_calls` records `attempts` (requests started), `hedged`, `hedge_suppressed`, `winner` (which request gave the result, 1 = the first) and `error_class` (e.g. `ClientError:429`) for failures.
 - If no valid result arrives by the deadline, or the call fails, the turn changes nothing and shows a fixed "typing is not working" message. The same happens when there is no API key. There are two versions, chosen by the current question:
   - Questions with buttons (choice fields, yes/no, date choice, conflict): "Typing is not working right now. You can use the buttons, or take a break and come back."
   - Typed questions (text, date, phone, email): "Typing is not working right now. Please try again in a moment, or take a break and come back."
@@ -521,7 +522,7 @@ Every write for one turn happens in **one transaction**. So a saved answer and i
 | `field_values` | (`intake_id`, `field_id`) unique · `value` · `display_value` · `status` (accepted/confirmed/skipped/deferred/dont_know/unknown_confirmed) · `source` (explicit/inferred/button) · `attempts` · `updated_at` | Current value per field. |
 | `pending_items` | `id` · `intake_id` · `seq` · `kind` (extra/conflict/date_choice) · `field_id` · `payload` JSON | The FIFO queue behind CONFIRMING_EXTRA / RESOLVING_CONFLICT. |
 | `intake_events` | `id` · `intake_id` · `seq` (per intake, unique) · `type` · `field_id` · `payload` JSON · `created_at` | **Append-only.** Types: `created`, `question_shown`, `field_proposed`, `field_accepted`, `field_confirmed`, `field_rejected`, `field_corrected`, `conflict_detected`, `conflict_resolved`, `field_skipped`, `field_deferred`, `field_marked_unknown`, `conflict_unresolved`, `paused`, `resumed`, `distress_shown`, `needs_human`, `unsafe_blocked`, `submitted`, `email_sent`, `email_denied`, `staff_summary_generated`, `benefit_demo_generated`. |
-| `llm_calls` | `id` · `intake_id` · `agent` · `model` · `input_tokens` · `output_tokens` · `latency_ms` · `reply_kind` · `status` (ok/parse_error/timeout/error/no_key; timeout = deadline passed) · `attempts` · `hedged` · `winner` · `error_class` · `created_at` | **No prompt or response text**, ever. |
+| `llm_calls` | `id` · `intake_id` · `agent` · `model` · `input_tokens` · `output_tokens` · `latency_ms` · `reply_kind` · `status` (ok/parse_error/timeout/error/no_key; timeout = deadline passed) · `attempts` · `hedged` · `hedge_suppressed` · `winner` · `error_class` · `created_at` | **No prompt or response text**, ever. |
 | `email_sends` | `id` · `intake_id` · `idempotency_key` (unique) · `status` · `provider` · `created_at` | Idempotency and audit. The recipient is not stored here. It is always re-read from `field_values`. |
 | `staff_outputs` | `id` · `intake_id` · `kind` (staff_summary/benefit_demo) · `content` JSON · `created_at` | Generated drafts. |
 
@@ -686,7 +687,7 @@ class StaffSummary(BaseModel):
 | `MAX_MESSAGE_CHARS` | 1000 | |
 | `MAX_FIELD_ATTEMPTS` | 3 | |
 | `LLM_DEADLINE_S` | 12 | Overall deadline per turn for the understanding call (§6). |
-| `LLM_HEDGE_AFTER_S` | 3 | Start one identical second request if there is no reply yet. |
+| `LLM_HEDGE_AFTER_S` | 4 | Start one identical second request if there is no reply yet. |
 
 ---
 
@@ -795,6 +796,7 @@ Other safety tests (in `tests/safety`):
 | Unsafe actions accepted (state change or side effect caused by injection) | **0** |
 | Tokens and latency per intake and per turn | from `llm_calls` |
 | Latency per LLM call: p50 and p95 | from `llm_calls.latency_ms`, overall and per reply kind; timeouts and retries counted separately |
+| Hedge rate, hedge win rate, hedge suppressed rate | from `llm_calls.hedged`, `winner`, `hedge_suppressed`; used to tune `LLM_HEDGE_AFTER_S` (§14.4) |
 | LLM calls avoided by buttons | informational |
 
 The goal is **lower load per turn and zero repeated questions**. It is not fewer total questions.
@@ -818,6 +820,7 @@ The Phase 5 live runs showed API timeouts, 429s and 5xx errors in bursts. The ev
 - **Back off on 429:** pause and retry the conversation turn with exponential backoff and jitter, on top of the in-turn retry in §6.
 - **Resume:** results are saved after each conversation (one JSONL line per conversation). An interrupted run resumes from the first conversation without a saved result.
 - **Count API failures separately:** a turn that fails because of the API (`llm_calls.status` timeout or error, or `no_key`) is an API failure, not a model mistake. Accuracy and reply-kind metrics are computed over turns where the model answered; API failures are reported as their own rate, with `error_class` counts and how often the hedge fired and won.
+- **Hedge tuning:** `LLM_HEDGE_AFTER_S` (4 s) and the 60 s no-hedge window after a 429 are provisional. Final values come from eval data: report the **hedge rate** (share of calls where the hedge fired), the hedge win rate, the suppressed rate, extra requests per turn, and p50/p95 latency with and without a hedge.
 
 ---
 

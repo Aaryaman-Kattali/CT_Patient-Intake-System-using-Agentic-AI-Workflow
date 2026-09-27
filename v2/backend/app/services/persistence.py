@@ -105,6 +105,7 @@ class LlmCallRow(SQLModel, table=True):
     attempts: int = 1
     hedged: bool = False
     winner: int | None = None
+    hedge_suppressed: bool = False
     error_class: str | None = None
     reply_kind: str | None = None
     created_at: datetime = _ts()

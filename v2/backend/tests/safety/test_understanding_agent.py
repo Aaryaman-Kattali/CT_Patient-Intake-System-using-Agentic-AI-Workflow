@@ -183,6 +183,21 @@ def test_retry_waits_about_one_second_with_jitter() -> None:
     assert 1000 <= reply.call.latency_ms < 3000
 
 
+def test_no_hedge_for_a_while_after_a_429() -> None:
+    llm = ScriptedLlm().reply_with(ApiError(429), GOOD, Slow(1.0, GOOD), Slow(3.0, OTHER), GOOD)
+    understander = make_understander(llm, hedge_after_s=0.2, cooldown_after_429_s=1.5)
+    first = understander.understand("Alex Rivera", CONTEXT)  # 429, then the retry works
+    assert _call(first) == ("ok", 2, False, 2)
+    during = understander.understand("Alex Rivera", CONTEXT)  # slow, but no second request
+    assert _call(during) == ("ok", 1, False, 1)
+    assert during.call.hedge_suppressed
+    assert len(llm.requests) == 3
+    time.sleep(1.6)  # the cooldown has passed: hedging is back
+    after = understander.understand("Alex Rivera", CONTEXT)
+    assert _call(after) == ("ok", 2, True, 2)
+    assert not after.call.hedge_suppressed
+
+
 def test_no_retry_when_the_delay_would_pass_the_deadline() -> None:
     llm = ScriptedLlm().reply_with(ApiError(503), GOOD)
     understander = make_understander(llm, deadline_s=3.0, retry_delay_s=5.0)

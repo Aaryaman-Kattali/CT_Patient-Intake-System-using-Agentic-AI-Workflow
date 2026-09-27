@@ -23,7 +23,7 @@ from google.genai import errors as genai_errors
 from google.genai import types
 from pydantic import BaseModel, ValidationError
 
-from app.agents.hedging import AttemptResult, HedgeOutcome, HedgePolicy, hedged_call
+from app.agents.hedging import AttemptResult, Cooldown, HedgeOutcome, HedgePolicy, hedged_call
 from app.agents.prompts import UNDERSTANDING_INSTRUCTION
 from app.config import Settings
 from app.workflow.understanding import (
@@ -143,6 +143,7 @@ class AdkUnderstander:
     def __init__(self, model: BaseLlm, policy: HedgePolicy) -> None:
         self._model_name = model.model
         self._policy = policy
+        self._cooldown = Cooldown(policy.cooldown_after_429_s)  # process-level: built once
         self._sessions = InMemorySessionService()
         self.agent = build_agent(model)
         self._runner = Runner(app_name=APP_NAME, agent=self.agent, session_service=self._sessions)
@@ -155,7 +156,11 @@ class AdkUnderstander:
     def understand(self, message: str, context: UnderstandingContext) -> AgentReply:
         prompt = build_prompt(message, context)
         started = time.monotonic()
-        call = hedged_call(functools.partial(self._attempt, prompt), self._policy)
+        call = hedged_call(
+            functools.partial(self._attempt, prompt),
+            self._policy,
+            may_hedge=lambda: not self._cooldown.active(),
+        )
         future = asyncio.run_coroutine_threadsafe(call, self._loop)
         try:
             outcome = future.result(timeout=self._policy.deadline_s + LOOP_GRACE_S)
@@ -174,6 +179,7 @@ class AdkUnderstander:
             attempts=outcome.attempts,
             hedged=outcome.hedged,
             winner=outcome.winner,
+            hedge_suppressed=outcome.hedge_suppressed,
             error_class=outcome.error_class,
         )
 
@@ -183,6 +189,8 @@ class AdkUnderstander:
             text, usage = await self._run(prompt)
         except Exception as error:  # network or SDK error: reported, never crashes the turn
             error_class, transient = classify_error(error)
+            if error_class.endswith(":429"):
+                self._cooldown.start()
             log.warning(
                 "understanding attempt failed: %s", error_class, extra={"error_class": error_class}
             )

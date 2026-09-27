@@ -36,7 +36,7 @@ class Settings(BaseSettings):
     max_field_attempts: int = Field(default=3, ge=1, le=10)
     # One hedged call per turn (docs/V2_SPEC.md §6): nothing runs past the deadline.
     llm_deadline_s: float = Field(default=12.0, gt=0)
-    llm_hedge_after_s: float = Field(default=3.0, gt=0)
+    llm_hedge_after_s: float = Field(default=4.0, gt=0)
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
 
     @field_validator("synthetic_only")
