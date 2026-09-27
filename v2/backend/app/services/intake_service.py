@@ -73,6 +73,9 @@ class TurnResult:
     status: str  # "applied" | "stale" | "rejected" | "not_found"
     view: TurnView | None
     reason: str | None = None
+    # A rejected turn that still has text for the user ("That message is too long", retry
+    # hints). The API answers it as a normal turn; a rejection without text is a client error.
+    tells_user: bool = False
 
 
 class IntakeService:
@@ -109,6 +112,27 @@ class IntakeService:
     def find_by_resume_code(self, code: str) -> UUID | None:
         code_hash = lookup_hash(code, self._secret)
         return self._repo.find_by_resume_code_hash(code_hash) if code_hash else None
+
+    def open_with_resume_code(self, code: str) -> Created | None:
+        """A resume code from a new device: issue a new token (the old one stops working)
+        and, if the intake is paused, resume it. None if the code matches no intake."""
+        intake_id = self.find_by_resume_code(code)
+        if intake_id is None:
+            return None
+        token = secrets.token_urlsafe(32)
+        self._repo.replace_token_hash(intake_id, hash_secret(token))
+        snap = self._repo.load(intake_id)
+        if snap is None:
+            return None
+        view = self._render(snap)
+        if snap.state is State.PAUSED:
+            result = self.handle(intake_id, snap.turn, c.Resume())
+            view = result.view or view
+        return Created(intake_id=intake_id, token=token, view=view)
+
+    def review(self, intake_id: UUID) -> TurnView | None:
+        snap = self._repo.load(intake_id)
+        return render(snap, with_review=True) if snap else None
 
     def resume_code(self, intake_id: UUID) -> str:
         return resume_code_for(intake_id, self._secret)
@@ -155,7 +179,12 @@ class IntakeService:
         result = handle(snap, command, self._config(), understanding, guard_events)
         if not isinstance(result, Applied):
             log.info("turn rejected", extra={"intake_id": str(snap.id), "reason": result.reason})
-            return TurnResult("rejected", self._render(snap, result.notes), result.reason)
+            return TurnResult(
+                "rejected",
+                self._render(snap, result.notes),
+                result.reason,
+                tells_user=bool(result.notes.info),
+            )
         if not self._repo.save(result.snapshot, expected_turn, result.events):
             current = self._repo.load(snap.id)
             return TurnResult("stale", self._render(current) if current else None, "stale_turn")
@@ -178,7 +207,9 @@ class IntakeService:
         )
         if screened.too_long:  # never sent to the LLM
             notes = Notes(info=[t.MESSAGE_TOO_LONG])
-            return TurnResult("rejected", self._render(snap, notes), "message_too_long")
+            return TurnResult(
+                "rejected", self._render(snap, notes), "message_too_long", tells_user=True
+            )
         events: list[EventRecord] = []
         if screened.flags:
             events.append(
@@ -212,7 +243,8 @@ class IntakeService:
         )
         if u is None:  # no key, timeout, outage or unreadable output: not the user's mistake
             notes = Notes(info=list(_unavailable_text(snap)))
-            return TurnResult("rejected", self._render(snap, notes), "llm_" + reply.call.status)
+            reason = "llm_" + reply.call.status
+            return TurnResult("rejected", self._render(snap, notes), reason, tells_user=True)
         checked = guard_output.check(screened.text, u, context, screened.flags)
         events += [
             EventRecord(type="proposal_rejected", field_id=f, payload={"reason": r})

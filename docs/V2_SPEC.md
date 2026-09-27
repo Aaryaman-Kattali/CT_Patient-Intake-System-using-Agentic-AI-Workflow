@@ -26,7 +26,7 @@ Standard multi-field forms overwhelm many people in this group. The single most 
 
 This is a portfolio demo. It must never process real personal or health data.
 - `SYNTHETIC_ONLY` is a config setting that defaults to `true`. The app **refuses to start** if it is `false` in this version (there is no supported real-data mode).
-- In synthetic mode, the SMTP email provider only sends to reserved test domains (`example.com`, `example.org`, `example.net`, `*.test`, `*.invalid`). Any other recipient is refused. The default provider is `console`, which sends nothing.
+- No real email is ever sent. The providers are `console` (default: logs one line, never the recipient) and `file` (writes `.eml` files to an outbox folder outside the repository). Only reserved test domains are accepted as recipients (`example.com`, `example.org`, `example.net`, `*.test`, `*.invalid`); any other address is refused. There is no SMTP provider.
 - The UI shows a permanent banner: "Demo only. Do not enter real personal information."
 - The README states this clearly.
 - There is no auth beyond a demo session token (see §9).
@@ -521,10 +521,10 @@ Every write for one turn happens in **one transaction**. So a saved answer and i
 | `intakes` | `id` UUIDv4 PK · `state` · `turn` · `resume_state` · `pinned_field` · `return_to_review` · `interruption` · `attempts` JSON · `undo` JSON · `token_hash` · `resume_code_hash` · `synthetic` (always true) · `created_at` · `updated_at` | One row per intake. No module globals. Intake type and respondent are derived from `field_values`, not duplicated. |
 | `field_values` | (`intake_id`, `field_id`) unique · `value` · `display_value` · `status` (accepted/confirmed/skipped/deferred/dont_know/unknown_confirmed) · `source` (explicit/inferred/button) · `attempts` · `updated_at` | Current value per field. |
 | `pending_items` | `id` · `intake_id` · `seq` · `kind` (extra/conflict/date_choice) · `field_id` · `payload` JSON | The FIFO queue behind CONFIRMING_EXTRA / RESOLVING_CONFLICT. |
-| `intake_events` | `id` · `intake_id` · `seq` (per intake, unique) · `type` · `field_id` · `payload` JSON · `created_at` | **Append-only.** Types: `created`, `question_shown`, `field_proposed`, `field_accepted`, `field_confirmed`, `field_rejected`, `field_corrected`, `conflict_detected`, `conflict_resolved`, `field_skipped`, `field_deferred`, `field_marked_unknown`, `conflict_unresolved`, `paused`, `resumed`, `distress_shown`, `needs_human`, `unsafe_blocked`, `submitted`, `email_sent`, `email_denied`, `staff_summary_generated`, `benefit_demo_generated`. |
+| `intake_events` | `id` · `intake_id` · `seq` (per intake, unique) · `type` · `field_id` · `payload` JSON · `created_at` | **Append-only.** Side-effect events (`email_sent`, `email_failed`, `email_denied`, `staff_summary_generated`, `benefit_demo_generated`) are appended without changing the turn. Types: `created`, `question_shown`, `field_proposed`, `field_accepted`, `field_confirmed`, `field_rejected`, `field_corrected`, `conflict_detected`, `conflict_resolved`, `field_skipped`, `field_deferred`, `field_marked_unknown`, `conflict_unresolved`, `paused`, `resumed`, `distress_shown`, `needs_human`, `unsafe_blocked`, `submitted`, `email_sent`, `email_denied`, `staff_summary_generated`, `benefit_demo_generated`. |
 | `llm_calls` | `id` · `intake_id` · `agent` · `model` · `input_tokens` · `output_tokens` · `latency_ms` · `reply_kind` · `status` (ok/parse_error/timeout/error/no_key; timeout = deadline passed) · `attempts` · `hedged` · `hedge_suppressed` · `winner` · `error_class` · `created_at` | **No prompt or response text**, ever. |
-| `email_sends` | `id` · `intake_id` · `idempotency_key` (unique) · `status` · `provider` · `created_at` | Idempotency and audit. The recipient is not stored here. It is always re-read from `field_values`. |
-| `staff_outputs` | `id` · `intake_id` · `kind` (staff_summary/benefit_demo) · `content` JSON · `created_at` | Generated drafts. |
+| `email_sends` | `id` · `intake_id` · `idempotency_key` (unique per intake) · `status` (sending/sent/failed) · `provider` · `created_at` | Idempotency and audit. The key is claimed before sending, so two concurrent requests with one key send once. The recipient is not stored here. It is always re-read from `field_values`. |
+| `staff_outputs` | `id` · `intake_id` · `kind` (staff_summary/benefit_demo, unique per intake) · `content` JSON · `created_at` | Generated drafts, built once (SUBMITTED is final). |
 
 The DB file path comes from `DATABASE_URL`. The default is `~/.intake-v2/intake.db`, **outside the repository**, so intake data can never be committed by accident. `v2/backend/var/` and `*.db` stay gitignored as a backstop.
 
@@ -533,7 +533,9 @@ The DB file path comes from `DATABASE_URL`. The default is `~/.intake-v2/intake.
 - The database stores only a scrypt hash (fixed salt derived from `APP_SECRET`, so it can be indexed), written at the first pause.
 - Every pause shows the code again in its own `resume_code` field (the UI adds a copy button), with the fixed line "Write this code down."
 - Lookup accepts any case, spaces or dashes, and rejects malformed input before hashing.
-- **Phase 6:** rate-limit failed resume attempts per code and per client.
+- **Rate limits (Phase 6):** failed attempts are counted per code (normalized, so any spelling counts as the same code) and per client address, in a sliding window (defaults: 5 per code, 20 per client, per 15 minutes; in memory). Past the limit, even a correct code gets `429 too_many_attempts`. Every failure gets the same fixed answer (`resume_failed`), whether the code exists, is malformed, or has not been issued yet.
+- **New device:** a correct code issues a **new token** and the old one stops working. A paused intake is resumed right away.
+- The code is shown when the user pauses (§9.1), not at creation: its hash is only stored at the first pause.
 
 **Unresolved conflicts.** "I'm not sure" on a conflict question (a button, or typed "I don't know") keeps the earlier value and saves the other answer in `field_values.unresolved_other`, with a `conflict_unresolved` event. Any later change to that field clears it.
 
@@ -545,49 +547,69 @@ The DB file path comes from `DATABASE_URL`. The default is `~/.intake-v2/intake.
 
 ### 9.1 Endpoints
 
-All `/intakes/{id}/*` routes require header `X-Intake-Token`. This is a demo token returned by `POST /intakes`, and only its hash is stored. It is **not** an auth system.
+All `/intakes/{id}/*` routes require header `X-Intake-Token`. This is a demo token returned by `POST /intakes`, and only its hash is stored. It is **not** an auth system. A wrong or missing token gets the same `404 intake_not_found` as an unknown id, so ids cannot be probed. The staff endpoints use the same token in this demo.
 
-| Method & path | Purpose | Notes |
-|---|---|---|
-| `POST /intakes` | Create an intake | Returns `{id, token, resume_code, turn}`. State GREETING. |
-| `GET /intakes/{id}` | Current state + current turn + progress | Used on page load and resume. |
-| `POST /intakes/{id}/start` | GREETING → CHOOSE_INTAKE_TYPE | |
-| `POST /intakes/{id}/replies` | Body: a command (`text`, `choose`, `skip`, `undo`, ...) + `turn` | Returns the next `Turn`. A reply whose `turn` is not the current one gets **409 stale** with the current view (§8 turn numbers). |
-| `POST /intakes/{id}/pause` | → PAUSED | Returns resume instructions. |
-| `POST /intakes/{id}/resume` | PAUSED/NEEDS_HUMAN → previous state | Token, or `{resume_code}` from a new device. |
-| `GET /intakes/{id}/review` | All values, grouped by section, plus "Still needed" | |
-| `POST /intakes/{id}/review/edit` | `{field_id}` → pins that question | |
-| `POST /intakes/{id}/submit` | REVIEW → SUBMITTED | 409 + missing list if incomplete. |
-| `POST /intakes/{id}/email` | Send the confirmation email | Header `Idempotency-Key` required. **No recipient in the body.** Allowed only in SUBMITTED, only if `email` has an accepted/confirmed value. |
-| `POST /intakes/{id}/staff-summary` | Generate the staff summary (§11.1) | SUBMITTED only. |
-| `POST /intakes/{id}/benefit-summary` | Generate the synthetic benefit demo (§11.2) | SUBMITTED only. |
-| `GET /health` | Liveness | |
+Every state-changing request carries the `turn` the client last saw (§8). Request bodies forbid unknown fields.
 
-There is **no** SOAP endpoint (D1).
+| Method & path | Purpose | Success | Errors |
+|---|---|---|---|
+| `POST /intakes` | Create an intake | `201 SessionView {id, token, view}` (state GREETING) | – |
+| `GET /intakes/{id}` | Current turn | `Turn` | 404 |
+| `POST /intakes/{id}/start` | GREETING → CHOOSE_INTAKE_TYPE | `Turn` | 404, 409 |
+| `POST /intakes/{id}/replies` | `{turn, command}`: `choose`, `text`, `skip`, `undo`, `keep_going`, `talk_to_person`, `mark_unknown` | `Turn` | 404, 409 |
+| `POST /intakes/{id}/pause` | → PAUSED | `Turn` with `resume_code` | 404, 409 |
+| `POST /intakes/{id}/resume` | PAUSED → where they were; NEEDS_HUMAN → "Continue on my own" | `Turn` | 404, 409 |
+| `POST /intakes/resume` | `{resume_code}` from a new device (no token) | `SessionView` with a **new** token | 400 `resume_failed`, 429 `too_many_attempts` |
+| `GET /intakes/{id}/review` | All answers (with their section) plus what is missing, in any state | `Turn` with `review` | 404 |
+| `POST /intakes/{id}/review/edit` | `{turn, field_id}` → pins that question | `Turn` | 404, 409 |
+| `POST /intakes/{id}/submit` | REVIEW → SUBMITTED | `Turn` | 409 `form_incomplete` (view lists what is missing), 409 `action_not_available` outside REVIEW |
+| `POST /intakes/{id}/email` | Send the confirmation email | `Turn` with a fixed info line | 400 `idempotency_key_required`, 409 `email_not_submitted` / `email_no_address` / `email_not_synthetic`, 502 `email_failed`, 422 for **any** body field (there is no recipient) |
+| `POST /intakes/{id}/staff-summary` | Staff summary (§11.1) | `StaffSummary` | 409 `not_submitted` |
+| `POST /intakes/{id}/benefit-summary` | Synthetic benefit demo (§11.2) | `BenefitSummary` | 409 `not_submitted` |
+| `GET /health` | Liveness | `{status, synthetic_only}` | – |
+
+There is **no** SOAP endpoint (D1). The conversational endpoints answer only with a `Turn`; the two staff endpoints answer with their own typed drafts.
+
+**Turn results.** A stale `turn` gets `409 stale_turn` with the current view. A command the engine refuses **with** text for the user (for example "That message is too long", a retry hint, or "Typing is not working right now") is a normal `200` turn: nothing changed and the text says why. A refusal **without** such text (for example `skip` before starting) is `409 action_not_available` with the current view.
+
+**Errors.** Every error body is `ErrorBody {code, message, view}`: a fixed code, one fixed plain-language message per code (checked by the wording tests), and the current view where it helps. Exception text, request bodies and field values never appear in a response; validation errors do not echo the input. Unexpected errors are logged through the redacting logger and answered with `500 internal_error`.
+
+**CORS.** Only `FRONTEND_ORIGIN` may call the API from a browser (methods GET/POST; headers `Content-Type`, `X-Intake-Token`, `Idempotency-Key`).
+
+**Contract.** Every route declares its success model and `ErrorBody` for its errors in OpenAPI. A contract test calls every endpoint (success and error paths) and validates every response against the declared model, so the Phase 7 frontend can generate its TypeScript types from `/openapi.json`.
+
+**Lifespan.** The database engine, the understander (built once per process), the services and the rate limiters are created in the FastAPI lifespan and kept on `app.state`. There are no module-level globals.
 
 ### 9.2 `Turn` response
 
 ```json
 {
-  "state": "COLLECTING",
+  "state": "collecting",
+  "turn": 7,
   "acknowledgement": "Saved.",
+  "info": [],
   "question": {
+    "kind": "field | confirm_extra | confirm_value | conflict | date_choice",
     "field_id": "date_of_birth",
-    "kind": "field | confirm_extra | conflict | date_choice | distress | resume",
     "text": "What is your date of birth?",
     "example": "May 4, 2004",
     "input_type": "date",
     "options": [],
+    "why": "We use this to find your records.",
     "can_skip": false,
     "can_defer": true
   },
-  "info": null,
-  "progress": { "answered": 3, "about_total": 12,
-                "sections": [{"name": "About you", "done": true}] }
+  "actions": [{"id": "take_a_break", "label": "Take a break"}],
+  "progress": { "answered": 3, "about_total": 12, "exact": true,
+                "sections": [{"name": "About you", "done": true}] },
+  "review": null,
+  "resume_code": null
 }
 ```
 
-`question` is **one object or null**, never a list. That is P1 at the API boundary. `info` carries fixed non-question text (the `why` answer, distress guidance, pause instructions).
+`question` is **one object or null**, never a list. That is P1 at the API boundary (checked in the OpenAPI schema too). `info` carries fixed non-question text (the `why` answer, distress guidance, pause instructions, what happens after "Talk to a person"). `review` is filled in REVIEW and by `GET /review`. `resume_code` is filled only while paused.
+
+**"Talk to a person".** NEEDS_HUMAN shows fixed text saying what happens next: a staff member will contact them using the phone number or email in the form (or, if there is none yet, that we do not have one and they can keep going and add one), that their answers are saved, and that they can keep going on their own at any time. Answers are never changed by this.
 
 ---
 
@@ -633,7 +655,8 @@ with `[REDACTED]`. Logs carry ids, field ids, states and event types only. **Lim
 
 ### 11.1 Intake summary for staff (replaces SOAP, D1)
 
-- Built by **deterministic code** (`services/staff_summary.py`) from `field_values` and `intake_events` of the current intake only.
+- Built by **deterministic code** (`services/staff_summary.py`) from `field_values` and `intake_events` of the current intake only, passed in by the application. Built once after SUBMITTED and stored.
+- Fixed phrases: "<Label>: <value>", "<Label>: Not answered, please follow up." (deferred), "<Label>: Not known, please follow up." (unknown_confirmed or dont_know), "<Label>: Two answers given: X and Y, please check." (unresolved conflict, citing the field and the `conflict_unresolved` event), and notes "Asked to talk to a person." / "Crisis support information was shown. A staff member was asked to make contact." (citing the `needs_human` event). Optional fields the user skipped are not listed.
 - Shape:
 
 ```python
@@ -662,14 +685,15 @@ class StaffSummary(BaseModel):
 
 - Deterministic. Insurance numbers are generated from a seed based on the intake id, reusing the V1 benefit text layout.
 - Every output starts and ends with: **"SYNTHETIC DEMO. These numbers are made up. They are not linked to any insurance plan."**
-- It uses only `full_name` from the current intake. It has no access to other records.
+- It uses only `full_name` from the current intake (cited as `field:full_name`). It has no access to other records. The numbers are seeded from the intake id.
 
 ### 11.3 Email
 
 - `services/email.py`: `send_confirmation(intake_id, idempotency_key)`. There is **no recipient parameter**. The recipient is read from `field_values[email]` of that intake.
-- Providers: `console` (default, logs a redacted line) and `smtp` (reserved test domains only while `SYNTHETIC_ONLY`).
+- Providers: `console` (default: logs one line, never the recipient) and `file` (writes `.eml` files to `EMAIL_OUTBOX_DIR`, outside the repository). No real email is sent, and there is no SMTP provider. Only reserved test domains are accepted as recipients (§1.3).
 - The same idempotency key returns the first result and does not send again.
-- Body: fixed plain-language template. It contains no answers beyond the first name.
+- Body: fixed plain-language template. It contains **no** answers from the form, not even a name (whose name to use is unclear when a parent or a health worker fills the form).
+- Allowed only in SUBMITTED, which is reachable only after the user approved the review screen. Denials are recorded as `email_denied` events.
 
 ---
 
@@ -682,7 +706,12 @@ class StaffSummary(BaseModel):
 | `GOOGLE_API_KEY` | – | Optional. In `v2/backend/.env`, read by `Settings` and passed to the Gemini client explicitly. Without it (or if it is blank), no model is called: buttons work and typed replies get the fixed "Typing is not working right now" message, and `llm_calls.status` is `no_key`. `.env.example` (empty values) is committed; `.env` is gitignored; the owner creates `.env`. Only `pytest -m live` reads `.env`. |
 | `SYNTHETIC_ONLY` | `true` | Validator: must be `true`, or startup fails. |
 | `DATABASE_URL` | `sqlite:///var/intake.db` | Relative to backend dir, gitignored. |
-| `EMAIL_PROVIDER` | `console` | `console` / `smtp` |
+| `EMAIL_PROVIDER` | `console` | `console` / `file`. No real email is ever sent. |
+| `EMAIL_OUTBOX_DIR` | `~/.intake-v2/outbox` | For the `file` provider. Outside the repository. |
+| `FRONTEND_ORIGIN` | `http://localhost:5173` | The only CORS origin. |
+| `RESUME_MAX_FAILURES_PER_CODE` | 5 | Failed resume attempts per code per window. |
+| `RESUME_MAX_FAILURES_PER_CLIENT` | 20 | Failed resume attempts per client address per window. |
+| `RESUME_FAILURE_WINDOW_S` | 900 | Sliding window for both limits. |
 | `REGION` | `US` | Selects the default phone-parsing region and the per-region content file `app/content/regions/<region>.toml` (crisis and emergency text: 911, 988). Crisis text lives only in these files, never in code. Startup fails if the file for `REGION` is missing. |
 | `MAX_MESSAGE_CHARS` | 1000 | |
 | `MAX_FIELD_ATTEMPTS` | 3 | |
@@ -716,7 +745,7 @@ Every Critical and High item has at least one named test. All of them live in `t
 | #3 nothing saved until end | Crit | `test_partial_intake_survives_restart` (answer 3 fields, dispose app + engine, new app, same values and same pending question) · `test_each_accepted_answer_is_committed_before_response` |
 | #4 intake type asked repeatedly | High | `test_intake_type_asked_once` · `test_no_field_asked_again_after_resolution` (property test) · `test_frontend_renders_no_hardcoded_questions` (vitest, frontend) |
 | #5 global shared session | Crit | `test_concurrent_intakes_are_isolated` (interleave two intakes, assert no value crosses) · `test_intake_ids_are_uuid4` · `test_app_factory_creates_independent_state` |
-| #6 email wrong recipient | Crit | `test_email_recipient_ignores_llm_argument` · `test_email_has_no_fallback_to_other_records` (intake without email, other intakes with email → deny) · `test_email_endpoint_rejects_recipient_in_body` · `test_email_idempotency_key_prevents_duplicate_send` |
+| #6 email wrong recipient | Crit | `test_email_recipient_ignores_llm_argument` · `test_email_has_no_fallback_to_other_records` (intake without email, other intakes with email → deny) · `test_email_endpoint_rejects_recipient_in_body` · `test_email_idempotency_key_prevents_duplicate_send` · `test_email_requires_idempotency_key` |
 | #7 PII in debug prints | High | `test_logs_contain_no_field_values` (full flow, capture logs, assert no stored value appears) · `test_redaction_filter_masks_emails_phones_dates` · ruff `T201` (no `print`) in CI |
 | #8 outputs disconnected from intake | High | `test_staff_summary_uses_only_current_intake` · `test_benefit_demo_uses_only_current_intake_name` · `test_benefit_demo_is_labelled_synthetic` |
 | #9 format burden | High | `test_date_formats_accepted` (parametrized) · `test_ambiguous_date_requires_choice` · `test_phone_formats_normalized` · `test_gender_options_inclusive` · `test_retry_text_never_blames_user` |
@@ -725,9 +754,9 @@ Every Critical and High item has at least one named test. All of them live in `t
 | B2 LLM can read other records | Crit | `test_agent_has_no_read_tools` · `test_agent_input_contains_only_current_intake` · `test_agent_input_contains_no_stored_values` |
 | B3 path traversal / file writes | Crit | `test_agents_do_not_write_files` (run agent in temp cwd, directory stays empty) · `test_no_filesystem_writes_outside_db_path` |
 | B4 invented diagnoses | High | `test_no_soap_endpoint` · `test_staff_summary_every_statement_cites_source` · `test_staff_summary_contains_no_clinical_terms` |
-| B5 email without review | High | `test_email_denied_in_every_state_except_submitted` · `test_submit_requires_review_state` |
+| B5 email without review | High | `test_email_denied_in_every_state_except_submitted` · `test_submit_requires_review_state` · `test_email_allowed_once_submitted` |
 | B9 no tests | High | Covered by the CI workflow itself. `test_ci_workflow_runs_tests_and_linters` checks the workflow file lists the steps. |
-| B11 data inside source tree | High | `test_default_db_path_is_outside_repo` · `test_in_repo_db_location_is_gitignored` · `test_db_path_comes_from_config` · `test_smtp_provider_rejects_non_reserved_domains` |
+| B11 data inside source tree | High | `test_default_db_path_is_outside_repo` · `test_in_repo_db_location_is_gitignored` · `test_db_path_comes_from_config` · `test_email_only_to_reserved_example_domains` · `test_default_outbox_is_outside_the_repository` |
 
 Other safety tests (in `tests/safety`):
 - `test_injection_cannot_change_state_or_recipient`

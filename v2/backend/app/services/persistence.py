@@ -13,6 +13,7 @@ from uuid import UUID
 
 from sqlalchemy import JSON, Column, DateTime, Engine, UniqueConstraint, event, func, text
 from sqlalchemy.engine import make_url
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import Field, Session, SQLModel, create_engine, delete, select, update
 
 from app.domain.fields import FieldState
@@ -111,6 +112,34 @@ class LlmCallRow(SQLModel, table=True):
     created_at: datetime = _ts()
 
 
+class EmailSendRow(SQLModel, table=True):
+    """Idempotency and audit for confirmation emails. The recipient is never stored here:
+    it is always re-read from this intake's stored email field."""
+
+    __tablename__ = "email_sends"
+    __table_args__ = (UniqueConstraint("intake_id", "idempotency_key"),)
+
+    id: int | None = Field(default=None, primary_key=True)
+    intake_id: UUID = Field(foreign_key="intakes.id", index=True)
+    idempotency_key: str
+    status: str  # sending | sent | failed
+    provider: str
+    created_at: datetime = _ts()
+
+
+class StaffOutputRow(SQLModel, table=True):
+    """Generated drafts (staff summary, benefit demo). Built once: SUBMITTED is final."""
+
+    __tablename__ = "staff_outputs"
+    __table_args__ = (UniqueConstraint("intake_id", "kind"),)
+
+    id: int | None = Field(default=None, primary_key=True)
+    intake_id: UUID = Field(foreign_key="intakes.id", index=True)
+    kind: str  # staff_summary | benefit_demo
+    content: dict[str, Any] = Field(sa_column=Column(JSON, nullable=False))
+    created_at: datetime = _ts()
+
+
 _APPEND_ONLY_TRIGGERS = (
     """CREATE TRIGGER IF NOT EXISTS intake_events_no_update BEFORE UPDATE ON intake_events
        BEGIN SELECT RAISE(ABORT, 'intake_events is append-only'); END""",
@@ -198,11 +227,23 @@ class IntakeRepository:
             return True
 
     def events(self, intake_id: UUID) -> list[EventRecord]:
+        return [record for _, record in self.numbered_events(intake_id)]
+
+    def numbered_events(self, intake_id: UUID) -> list[tuple[int, EventRecord]]:
+        """Events with their per-intake sequence number, for "event:<seq>" citations."""
         with Session(self._engine) as session:
             rows = session.exec(
                 select(EventRow).where(EventRow.intake_id == intake_id).order_by(EventRow.seq)  # type: ignore[arg-type]
             )
-            return [EventRecord(type=r.type, field_id=r.field_id, payload=r.payload) for r in rows]
+            return [
+                (r.seq, EventRecord(type=r.type, field_id=r.field_id, payload=r.payload))
+                for r in rows
+            ]
+
+    def append_events(self, intake_id: UUID, events: tuple[EventRecord, ...]) -> None:
+        """Audit events for side effects. They do not change the intake or its turn."""
+        with Session(self._engine) as session, session.begin():
+            self._append(session, intake_id, self._turn(session, intake_id), events)
 
     def record_llm_call(
         self, intake_id: UUID, agent: str, call: LlmCallInfo, reply_kind: str | None
@@ -227,6 +268,74 @@ class IntakeRepository:
             row = session.get(IntakeRow, intake_id)
             return row.token_hash if row else None
 
+    def replace_token_hash(self, intake_id: UUID, token_hash: str) -> None:
+        """A resume code opened the intake on a new device: the old token stops working."""
+        with Session(self._engine) as session, session.begin():
+            session.exec(
+                update(IntakeRow).where(IntakeRow.id == intake_id).values(token_hash=token_hash)  # type: ignore[arg-type]
+            )
+
+    # --- side effects -----------------------------------------------------------
+
+    def claim_email(self, intake_id: UUID, key: str, provider: str) -> EmailSendRow | None:
+        """Reserve an idempotency key. None: it is ours, go ahead and send.
+        Otherwise the row of the first call with this key: send nothing."""
+        try:
+            with Session(self._engine) as session, session.begin():
+                row = EmailSendRow(
+                    intake_id=intake_id, idempotency_key=key, status="sending", provider=provider
+                )
+                session.add(row)
+        except IntegrityError:
+            return self.email_send(intake_id, key)
+        return None
+
+    def email_send(self, intake_id: UUID, key: str) -> EmailSendRow | None:
+        with Session(self._engine) as session:
+            return session.exec(
+                select(EmailSendRow).where(
+                    EmailSendRow.intake_id == intake_id, EmailSendRow.idempotency_key == key
+                )
+            ).first()
+
+    def finish_email(
+        self, intake_id: UUID, key: str, status: str, events: tuple[EventRecord, ...]
+    ) -> None:
+        with Session(self._engine) as session, session.begin():
+            session.exec(
+                update(EmailSendRow)
+                .where(
+                    EmailSendRow.intake_id == intake_id,  # type: ignore[arg-type]
+                    EmailSendRow.idempotency_key == key,  # type: ignore[arg-type]
+                )
+                .values(status=status)
+            )
+            self._append(session, intake_id, self._turn(session, intake_id), events)
+
+    def staff_output(self, intake_id: UUID, kind: str) -> dict[str, Any] | None:
+        with Session(self._engine) as session:
+            row = session.exec(
+                select(StaffOutputRow).where(
+                    StaffOutputRow.intake_id == intake_id, StaffOutputRow.kind == kind
+                )
+            ).first()
+            return dict(row.content) if row else None
+
+    def save_staff_output(
+        self, intake_id: UUID, kind: str, content: dict[str, Any], events: tuple[EventRecord, ...]
+    ) -> dict[str, Any]:
+        """Store once. If another request stored it first, return that one."""
+        try:
+            with Session(self._engine) as session, session.begin():
+                session.add(StaffOutputRow(intake_id=intake_id, kind=kind, content=content))
+                self._append(session, intake_id, self._turn(session, intake_id), events)
+        except IntegrityError:
+            existing = self.staff_output(intake_id, kind)
+            if existing is None:
+                raise
+            return existing
+        return content
+
     def find_by_resume_code_hash(self, code_hash: str) -> UUID | None:
         with Session(self._engine) as session:
             row = session.exec(
@@ -235,6 +344,13 @@ class IntakeRepository:
             return row.id if row else None
 
     # --- private helpers (events: append only) ---------------------------------
+
+    @staticmethod
+    def _turn(session: Session, intake_id: UUID) -> int:
+        row = session.get(IntakeRow, intake_id)
+        if row is None:
+            raise LookupError("intake not found")
+        return row.turn
 
     @staticmethod
     def _append(

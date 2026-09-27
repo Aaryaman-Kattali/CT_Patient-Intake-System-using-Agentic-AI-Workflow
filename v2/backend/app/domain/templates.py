@@ -75,8 +75,21 @@ OVERWHELMED = (
     "You can take a break. Your answers are saved.",
     "You can also ask to talk to a person.",
 )
+EMAIL_SENT = "We sent an email to say we have your form."
 MANY_TRIES = "We can come back to this question later."
-NEEDS_HUMAN = "We have asked a staff member to contact you."
+# "Talk to a person": what happens next. The answers stay saved either way.
+NEEDS_HUMAN = (
+    "We have asked a staff member to contact you.",
+    "They will use the phone number or email in your form.",
+    "Your answers are saved.",
+    "You can keep going on your own at any time.",
+)
+NEEDS_HUMAN_NO_CONTACT = (
+    "We have asked a staff member to help you.",
+    "We do not have a phone number or email for you yet.",
+    "Your answers are saved.",
+    "You can keep going on your own and add one.",
+)
 
 # --- Review screen.
 REVIEW_STILL_NEEDED = "Still needed"

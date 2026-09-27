@@ -162,8 +162,9 @@ def test_correction_requires_quoted_value(tmp_path: Path) -> None:
 
 def test_intake_events_append_only(tmp_path: Path) -> None:
     public = [n for n, _ in inspect.getmembers(IntakeRepository, inspect.isfunction)]
-    event_writers = [n for n in public if "event" in n and n != "events"]
-    assert event_writers == []  # the only event method is the reader
+    event_methods = {n for n in public if "event" in n}
+    # Two readers and one appender (side-effect audit events). No update or delete path.
+    assert event_methods == {"events", "numbered_events", "append_events"}
     source = inspect.getsource(persistence)
     assert "update(EventRow" not in source
     assert "delete(EventRow" not in source

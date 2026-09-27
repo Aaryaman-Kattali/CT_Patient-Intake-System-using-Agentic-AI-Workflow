@@ -713,7 +713,8 @@ def _needs_human(turn: _Turn, *, crisis: bool) -> Result:
         crisis_text = turn.config.crisis
         turn.notes.info += [crisis_text.heading, *crisis_text.lines]
         turn.event("distress_shown", level="crisis")
-    turn.notes.info.append(t.NEEDS_HUMAN)
+    reachable = any(answer_value(turn.answers, f) for f in ("phone", "email"))
+    turn.notes.info += list(t.NEEDS_HUMAN if reachable else t.NEEDS_HUMAN_NO_CONTACT)
     turn.notes.actions.append("continue_alone")
     turn.event("needs_human", reason="crisis" if crisis else "requested")
     return turn.finish(Trigger.NEEDS_HUMAN, State.NEEDS_HUMAN)

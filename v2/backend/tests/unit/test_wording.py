@@ -9,10 +9,12 @@ import re
 import pytest
 import textstat
 
+from app.api.errors import MESSAGES as ERROR_MESSAGES
 from app.config import load_region_content
 from app.domain import templates as t
 from app.domain.clinical import CONDITION_CLAIMS
 from app.domain.registry import FIELDS, get_field
+from app.services.email import BODY as EMAIL_BODY
 
 MAX_GRADE = 6.0
 MAX_QUESTION_WORDS = 15
@@ -63,7 +65,11 @@ SENTENCES = [
     t.MESSAGE_TOO_LONG,
     *t.OVERWHELMED,
     t.MANY_TRIES,
-    t.NEEDS_HUMAN,
+    *t.NEEDS_HUMAN,
+    *t.NEEDS_HUMAN_NO_CONTACT,
+    t.EMAIL_SENT,
+    *ERROR_MESSAGES.values(),
+    *(line for line in EMAIL_BODY if line),
     t.REVIEW_CANNOT_SUBMIT,
     t.NEEDED_FOR_CONTACT,
     *(t.NEEDED_BECAUSE_METHOD.format(choice=o.label) for o in METHOD_OPTIONS),

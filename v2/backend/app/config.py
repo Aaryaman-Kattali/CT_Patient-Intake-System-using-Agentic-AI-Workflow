@@ -12,6 +12,7 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 REGIONS_DIR = Path(__file__).resolve().parent / "content" / "regions"
 # Outside the repository, so intake data can never be committed by accident.
 DEFAULT_DB_PATH = Path.home() / ".intake-v2" / "intake.db"
+DEFAULT_OUTBOX_DIR = Path.home() / ".intake-v2" / "outbox"
 
 
 class Settings(BaseSettings):
@@ -30,7 +31,15 @@ class Settings(BaseSettings):
     google_api_key: SecretStr | None = None
     synthetic_only: bool = True
     database_url: str = f"sqlite:///{DEFAULT_DB_PATH.as_posix()}"
-    email_provider: Literal["console", "smtp"] = "console"
+    # No real email is ever sent. "console" logs a redacted line; "file" writes .eml files.
+    email_provider: Literal["console", "file"] = "console"
+    email_outbox_dir: Path = DEFAULT_OUTBOX_DIR
+    # The only origin the browser may call the API from (CORS).
+    frontend_origin: str = "http://localhost:5173"
+    # Failed resume-code attempts allowed per window, per code and per client.
+    resume_max_failures_per_code: int = Field(default=5, ge=1)
+    resume_max_failures_per_client: int = Field(default=20, ge=1)
+    resume_failure_window_s: float = Field(default=900.0, gt=0)
     region: str = Field(default="US", pattern=r"^[A-Z]{2}$")
     max_message_chars: int = Field(default=1000, ge=50, le=10_000)
     max_field_attempts: int = Field(default=3, ge=1, le=10)

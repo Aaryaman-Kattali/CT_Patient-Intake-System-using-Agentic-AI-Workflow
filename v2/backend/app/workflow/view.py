@@ -62,6 +62,7 @@ class ProgressView(_View):
 
 class ReviewRow(_View):
     field_id: str
+    section: str  # the section name shown to this user, for grouping
     label: str
     display: str
 
@@ -179,7 +180,12 @@ def _progress(snap: Snapshot) -> ProgressView:
 
 def _review(snap: Snapshot) -> ReviewView:
     answered = tuple(
-        ReviewRow(field_id=f.id, label=f.short_label, display=state.display or state.value or "")
+        ReviewRow(
+            field_id=f.id,
+            section=section_name(f.section, snap.answers),
+            label=f.short_label,
+            display=state.display or state.value or "",
+        )
         for f in applicable_fields(snap.answers)
         if (state := snap.answers.get(f.id)) is not None and state.answered
     )
@@ -211,7 +217,14 @@ def _actions(snap: Snapshot, notes: Notes) -> tuple[ActionView, ...]:
     return tuple(_action(i) for i in dict.fromkeys(ids))
 
 
-def render(snap: Snapshot, notes: Notes | None = None, resume_code: str | None = None) -> TurnView:
+def render(
+    snap: Snapshot,
+    notes: Notes | None = None,
+    resume_code: str | None = None,
+    *,
+    with_review: bool = False,
+) -> TurnView:
+    """with_review: include the review (all answers plus what is missing) in any state."""
     notes = notes or Notes()
     info = list(notes.info)
     if snap.state is State.GREETING and not info:
@@ -224,6 +237,6 @@ def render(snap: Snapshot, notes: Notes | None = None, resume_code: str | None =
         question=_question(snap),
         actions=_actions(snap, notes),
         progress=_progress(snap),
-        review=_review(snap) if snap.state is State.REVIEW else None,
+        review=_review(snap) if with_review or snap.state is State.REVIEW else None,
         resume_code=resume_code if snap.state is State.PAUSED else None,
     )
