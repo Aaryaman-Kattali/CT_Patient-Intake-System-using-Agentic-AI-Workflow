@@ -3,11 +3,9 @@ import {
   api,
   ApiFailure,
   type ActionView,
-  type BenefitSummary,
   type ReplyCommand,
   type ResumeCodeView,
   type Session,
-  type StaffSummary,
   type TurnView,
   type UiText,
 } from "./api/client";
@@ -40,8 +38,6 @@ export function App() {
   const [notice, setNotice] = useState<string | null>(null);
   const [code, setCode] = useState<ResumeCodeView | null>(null);
   const [codeEntry, setCodeEntry] = useState<CodeEntry>(NO_CODE_ENTRY);
-  const [staff, setStaff] = useState<StaffSummary | null>(null);
-  const [benefit, setBenefit] = useState<BenefitSummary | null>(null);
   const [announcement, setAnnouncement] = useState("");
   const headingRef = useRef<HTMLHeadingElement>(null);
   const busy = useRef(false);
@@ -82,8 +78,6 @@ export function App() {
     setSession(s);
     setView(next);
     setCode(null);
-    setStaff(null);
-    setBenefit(null);
   }, []);
 
   const newForm = useCallback(async () => {
@@ -203,11 +197,7 @@ export function App() {
         )}
         {view.state === "submitted" && (
           <AfterSubmit
-            staff={staff}
-            benefit={benefit}
             onEmail={() => void act(() => setTurn(api.email(session, emailKey(session.id))))}
-            onStaffSummary={() => void act(async () => setStaff(await api.staffSummary(session)))}
-            onBenefit={() => void act(async () => setBenefit(await api.benefitSummary(session)))}
             onNewForm={() => void act(newForm)}
           />
         )}

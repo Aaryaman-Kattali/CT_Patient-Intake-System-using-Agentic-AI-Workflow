@@ -308,6 +308,11 @@
       },
       "QuestionView": {
         "properties": {
+          "autocomplete": {
+            "default": "off",
+            "title": "Autocomplete",
+            "type": "string"
+          },
           "can_defer": {
             "title": "Can Defer",
             "type": "boolean"

@@ -459,6 +459,11 @@ export interface components {
         };
         /** QuestionView */
         QuestionView: {
+            /**
+             * Autocomplete
+             * @default off
+             */
+            autocomplete: string;
             /** Can Defer */
             can_defer: boolean;
             /** Can Skip */

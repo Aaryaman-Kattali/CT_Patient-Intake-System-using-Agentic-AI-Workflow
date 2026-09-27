@@ -51,6 +51,7 @@ export function question(overrides: Partial<QuestionView> = {}): QuestionView {
     why: "We use this to find your records.",
     can_skip: false,
     can_defer: true,
+    autocomplete: "off",
     ...overrides,
   };
 }

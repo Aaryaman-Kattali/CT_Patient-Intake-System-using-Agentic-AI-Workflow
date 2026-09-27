@@ -28,6 +28,11 @@ export async function expectQuestion(page: Page, text: string): Promise<void> {
 
 /** axe (WCAG 2.2 A/AA) finds nothing, and a full-page screenshot is saved for review. */
 export async function checkScreen(page: Page, name: string): Promise<void> {
+  if (!page.url().includes("/staff/")) {
+    // The patient's pages never lead to the staff view.
+    await expect(page.locator("a[href*='/staff']")).toHaveCount(0);
+    await expect(page.getByText("Staff view", { exact: false })).toHaveCount(0);
+  }
   const results = await new AxeBuilder({ page })
     .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"])
     .analyze();

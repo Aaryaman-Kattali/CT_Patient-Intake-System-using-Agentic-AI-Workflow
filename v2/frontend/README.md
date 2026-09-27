@@ -22,4 +22,16 @@ npm run e2e            # end-to-end: real backend + rule-based fake understander
   phone. Playwright runs axe (WCAG 2.2 A/AA) on every screen type and a keyboard-only walkthrough.
 - **Session**: the intake token is kept in `localStorage`, so closing the tab and coming back
   resumes on the same device. Another device uses the resume code.
+- **Autofill**: each question carries an `autocomplete` hint from the backend. It is a real
+  token only for details about the person typing (their own name and contact details, and the
+  patient's name and birthday only when the form is for themselves); otherwise `off`.
 - The end-to-end tests save screenshots of each screen type to `screenshots/`.
+
+## Staff view (demo)
+
+The staff summary and the synthetic benefit demo are on a separate page:
+[`/staff/<intake id>`](http://localhost:5173/staff/) (e.g.
+`http://localhost:5173/staff/0b1c…`). The patient's pages never link to it. This demo has no
+staff login: the page uses the intake token saved in this browser, so open it in the browser
+where the form was filled in. The intake id is in `localStorage` under `intake.session`. The
+drafts are available once the form is sent.

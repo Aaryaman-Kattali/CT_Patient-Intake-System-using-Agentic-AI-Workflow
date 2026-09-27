@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { answer, choose, expectQuestion, heading, openNewForm } from "./helpers";
+import { answer, checkScreen, choose, expectQuestion, heading, openNewForm } from "./helpers";
 
 /** Skip the optional questions until the review screen. */
 async function skipToReview(page: Page): Promise<void> {
@@ -129,8 +129,38 @@ test("after sending: email once, and the staff drafts", async ({ page }) => {
   await expect(sent).toBeVisible();
   await choose(page, "Email me a confirmation"); // same request key: nothing new is sent
   await expect(page.locator(".notice")).toHaveCount(0);
-  await choose(page, "Show the staff summary");
+  await expect(page.getByText(/staff summary|benefit/i)).toHaveCount(0); // not on the patient's page
+
+  // The staff view is a separate page, opened by its address only.
+  const id = await page.evaluate(
+    () => (JSON.parse(localStorage.getItem("intake.session") ?? "{}") as { id?: string }).id,
+  );
+  await page.goto(`/staff/${id}`);
+  await expect(heading(page)).toHaveText("Staff view (demo)");
   await expect(page.getByText("Full name: Alex Rivera")).toBeVisible();
-  await choose(page, "Show the benefit demo");
-  await expect(page.getByText(/SYNTHETIC DEMO/).first()).toBeVisible();
+  await expect(page.locator(".synthetic-band")).toHaveCount(2); // top and bottom
+  await checkScreen(page, "15-staff-view");
+});
+
+test("the staff view opens only where the form was filled in", async ({ page }) => {
+  await page.goto("/staff/00000000-0000-4000-8000-000000000000");
+  await expect(heading(page)).toHaveText("Staff view (demo)");
+  await expect(page.locator(".notice")).toHaveText(
+    "Open this page in the browser where the form was filled in.",
+  );
+});
+
+test("autofill hints only for the person typing", async ({ page, browser }) => {
+  await toFullName(page); // "Me": the patient is the person typing
+  await expect(page.getByLabel("Your answer")).toHaveAttribute("autocomplete", "name");
+
+  const other = await (await browser.newContext()).newPage();
+  await openNewForm(other);
+  await choose(other, "Start");
+  await choose(other, "Care for me or someone I look after");
+  await choose(other, "My child");
+  await expect(other.getByLabel("Your answer")).toHaveAttribute("autocomplete", "name"); // their name
+  await answer(other, "Jordan Rivera");
+  await expect(heading(other)).toHaveText("What is the patient's full name?");
+  await expect(other.getByLabel("Your answer")).toHaveAttribute("autocomplete", "off");
 });

@@ -317,25 +317,96 @@ label {
   gap: 0.5rem;
 }
 
-.staff {
-  border-top: 1px solid var(--line);
-  margin-top: 1.5rem;
+/* Staff view (demo): wider, record-like, and marked by a solid band so it can never be
+   mistaken for the patient's form. */
+.staff-page {
+  max-width: 60rem;
+  margin: 0 auto;
+  padding: 0 1rem 2rem;
 }
 
-.draft {
+.staff-band {
+  background: var(--accent);
+  color: var(--accent-text);
+  padding: 0.75rem 1.25rem;
+  border-radius: 0 0 var(--radius) var(--radius);
+  margin-bottom: 1.25rem;
+}
+
+.staff-band h1 {
+  margin: 0;
+  font-size: 1.25rem;
+}
+
+.staff-main {
+  display: grid;
+  gap: 1.25rem;
+  background: none;
+  border: none;
+  padding: 0;
+}
+
+.record {
+  background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--radius);
-  padding: 1rem;
-  margin-top: 1rem;
+  padding: 1.25rem;
 }
 
-.demo-label {
-  font-weight: 700;
+.record h2 {
+  margin-top: 0;
+}
+
+.record h3 {
+  font-size: 1.05rem;
+  margin: 1.25rem 0 0.25rem;
+}
+
+.record-note {
+  color: var(--muted);
+}
+
+.statements {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.statements li {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 1rem;
+  padding: 0.4rem 0;
+  border-bottom: 1px solid var(--line);
 }
 
 .sources {
   color: var(--muted);
   font-size: 0.85rem;
+  white-space: nowrap;
+}
+
+.benefit-lines div {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  padding: 0.4rem 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.benefit-lines dt {
+  font-weight: 600;
+}
+
+.benefit-lines dd {
+  margin: 0;
+}
+
+.synthetic-band {
+  background: var(--notice-bg);
+  border-left: 4px solid var(--notice-line);
+  padding: 0.5rem 0.75rem;
+  font-weight: 700;
 }
 
 .visually-hidden {
@@ -370,6 +441,10 @@ label {
   .bar button,
   .actions button {
     width: 100%;
+  }
+  .statements li {
+    flex-direction: column;
+    gap: 0.1rem;
   }
   .bar-left:has(.bar-placeholder) {
     display: none; /* no empty row on phones; the other buttons keep their order */

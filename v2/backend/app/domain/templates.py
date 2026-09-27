@@ -152,9 +152,7 @@ UI_LABELS: MappingProxyType[str, str] = MappingProxyType(
         "your_answers": "Your answers",
         "change": "Change",
         "email_me": "Email me a confirmation",
-        "staff_title": "For staff (demo)",
-        "staff_summary": "Show the staff summary",
-        "benefit_summary": "Show the benefit demo",
+        "staff_view": "Staff view (demo)",
         "new_form": "Start a new form",
         "back": "Back",
         "progress": "Your progress",
@@ -170,6 +168,8 @@ UI_SENTENCES: MappingProxyType[str, str] = MappingProxyType(
         "code_copied": "The code is copied.",
         "no_connection": "The form cannot be reached right now. Please try again in a moment.",
         "resume_intro": "Type the code you wrote down. Then you can go on with your form.",
+        # Staff page only (/staff/<intake id>). The patient pages never link to it.
+        "staff_open_here": "Open this page in the browser where the form was filled in.",
     }
 )
 # After the form is sent (the engine adds no text of its own on submit).

@@ -66,6 +66,7 @@ function TypedAnswer({ question, onCommand }: Omit<Props, "headingId">) {
         label={text.labels.answer_box ?? ""}
         example={question.example ? fill(text.sentences.example ?? "", { example: question.example }) : undefined}
         inputMode={question.input_type === "email" ? "email" : question.input_type === "phone" ? "tel" : "text"}
+        autoComplete={question.autocomplete}
         onSend={(value) => onCommand({ kind: "text", text: value })}
       />
     </div>
@@ -76,10 +77,12 @@ interface TextBoxProps {
   label: string;
   example?: string;
   inputMode?: "text" | "email" | "tel";
+  /** From the backend: a token only for details about the person typing, otherwise "off". */
+  autoComplete?: string;
   onSend: (value: string) => void;
 }
 
-function TextBox({ label, example, inputMode = "text", onSend }: TextBoxProps) {
+function TextBox({ label, example, inputMode = "text", autoComplete = "off", onSend }: TextBoxProps) {
   const text = useText();
   const id = useId();
   const [value, setValue] = useState("");
@@ -94,6 +97,7 @@ function TextBox({ label, example, inputMode = "text", onSend }: TextBoxProps) {
         id={id}
         type="text"
         inputMode={inputMode}
+        autoComplete={autoComplete}
         value={value}
         aria-describedby={example ? `${id}-example` : undefined}
         onChange={(e) => setValue(e.target.value)}

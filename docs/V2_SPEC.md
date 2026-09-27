@@ -127,6 +127,8 @@ Particular attention to:
 - Fixed places: "Why are you asking this?" directly under the question; a bar under every question screen with "Skip"/"Answer later" on the left and "Take a break" and "Show my code" (the code on request) on the right. "I'm not sure" is always the last option button.
 - Nothing changes on screen until the user acts. A double click sends one request.
 - The intake token is kept in `localStorage`, so closing the tab and coming back resumes on the same device. Text size (five steps) is remembered on the device. Targets are at least 48 px; one column on phones.
+- **Autofill (WCAG 1.3.5).** Each question carries `autocomplete`, set by the backend from who the field is about: `respondent_name` → `name`; Family Inquiry phone / email / address (always the respondent) → `tel` / `email` / `street-address`; `full_name` → `name` and `date_of_birth` → `bday` only when the form is for the person typing (relationship = me); everything else, including every Provider Referral field and any field about someone else, → `off`. Autofill must never put the respondent's own details into a field about someone else.
+- **Staff view (demo)** is a separate page, `/staff/<intake id>`, labelled "Staff view (demo)" in a solid band. It shows the staff summary and the benefit demo. The patient's pages never link to it (checked on every screen by the e2e tests); the submitted screen has only patient-facing text. There is no staff login in the demo: the page uses the intake token saved in that browser.
 - Tests: component tests (Vitest, Testing Library) and Playwright end-to-end tests against the real backend with a rule-based fake understander (`tests/e2e_server.py`, no Gemini). axe (WCAG 2.2 A/AA) runs on every screen type, and a keyboard-only walkthrough completes a full Family Inquiry.
 
 ## 4. Architecture
@@ -614,7 +616,8 @@ There is **no** SOAP endpoint (D1). The conversational endpoints answer only wit
     "options": [],
     "why": "We use this to find your records.",
     "can_skip": false,
-    "can_defer": true
+    "can_defer": true,
+    "autocomplete": "bday"
   },
   "actions": [{"id": "take_a_break", "label": "Take a break"}],
   "progress": { "answered": 3, "about_total": 12, "exact": true,
@@ -786,6 +789,7 @@ Other safety tests (in `tests/safety`):
 - `test_crisis_keywords_bypass_llm`
 - `test_llm_parse_failure_changes_nothing`
 - `test_illegal_transitions_raise` (enumerates all pairs)
+- `test_every_offered_action_works_from_every_reachable_state` (tests/workflow; property-based: random paths through the engine; at every step every action the Turn offers, including option buttons, typed answers with extras, Skip and every review button, must be applied without error and never refused silently)
 - `test_side_effects_only_in_submitted`
 
 ---

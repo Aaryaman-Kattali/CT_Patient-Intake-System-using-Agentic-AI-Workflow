@@ -15,7 +15,7 @@ from app.domain.requirements import (
     review_items,
 )
 from app.domain.types import InputType
-from app.domain.wording import question_text, section_name
+from app.domain.wording import autocomplete_hint, question_text, section_name
 from app.workflow.engine import FieldQuestion, Notes, QueueQuestion, current_question
 from app.workflow.snapshot import PendingKind, Snapshot
 from app.workflow.states import COLLECTING_STATES, State
@@ -41,6 +41,7 @@ class QuestionView(_View):
     why: str
     can_skip: bool
     can_defer: bool
+    autocomplete: str = "off"  # browser autofill hint; "off" unless about the person typing
 
 
 class ActionView(_View):
@@ -116,6 +117,7 @@ def _question(snap: Snapshot, synthetic: bool) -> QuestionView | None:
             why=t.with_demo_notice(fld.why, synthetic),
             can_skip=not needed,
             can_defer=needed and fld.id != "intake_type",
+            autocomplete=autocomplete_hint(fld, snap.answers),
         )
     return _queue_question(snap, q, synthetic)
 
