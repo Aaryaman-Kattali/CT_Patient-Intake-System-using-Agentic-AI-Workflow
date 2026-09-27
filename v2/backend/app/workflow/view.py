@@ -62,6 +62,7 @@ class ProgressView(_View):
 
 class ReviewRow(_View):
     field_id: str
+    section: str  # the section name shown to this user, for grouping
     label: str
     display: str
 
@@ -96,7 +97,7 @@ def _action(action_id: str) -> ActionView:
     return ActionView(id=action_id, label=t.BUTTONS[action_id])
 
 
-def _question(snap: Snapshot) -> QuestionView | None:
+def _question(snap: Snapshot, synthetic: bool) -> QuestionView | None:
     q = current_question(snap)
     if q is None:
         return None
@@ -112,14 +113,14 @@ def _question(snap: Snapshot) -> QuestionView | None:
             options=tuple(
                 OptionView(id=o.id, label=o.label, free_text=o.free_text) for o in fld.options
             ),
-            why=fld.why,
+            why=t.with_demo_notice(fld.why, synthetic),
             can_skip=not needed,
             can_defer=needed and fld.id != "intake_type",
         )
-    return _queue_question(snap, q)
+    return _queue_question(snap, q, synthetic)
 
 
-def _queue_question(snap: Snapshot, q: QueueQuestion) -> QuestionView:
+def _queue_question(snap: Snapshot, q: QueueQuestion, synthetic: bool) -> QuestionView:
     item, fld = q.item, get_field(q.item.field_id)
     options: tuple[OptionView, ...]
     if item.kind is PendingKind.CONFLICT:
@@ -153,7 +154,7 @@ def _queue_question(snap: Snapshot, q: QueueQuestion) -> QuestionView:
         example=None,
         input_type=InputType.CHOICE,
         options=options,
-        why=fld.why,
+        why=t.with_demo_notice(fld.why, synthetic),
         can_skip=False,
         can_defer=False,
     )
@@ -179,7 +180,12 @@ def _progress(snap: Snapshot) -> ProgressView:
 
 def _review(snap: Snapshot) -> ReviewView:
     answered = tuple(
-        ReviewRow(field_id=f.id, label=f.short_label, display=state.display or state.value or "")
+        ReviewRow(
+            field_id=f.id,
+            section=section_name(f.section, snap.answers),
+            label=f.short_label,
+            display=state.display or state.value or "",
+        )
         for f in applicable_fields(snap.answers)
         if (state := snap.answers.get(f.id)) is not None and state.answered
     )
@@ -211,7 +217,16 @@ def _actions(snap: Snapshot, notes: Notes) -> tuple[ActionView, ...]:
     return tuple(_action(i) for i in dict.fromkeys(ids))
 
 
-def render(snap: Snapshot, notes: Notes | None = None, resume_code: str | None = None) -> TurnView:
+def render(
+    snap: Snapshot,
+    notes: Notes | None = None,
+    resume_code: str | None = None,
+    *,
+    with_review: bool = False,
+    synthetic: bool = True,
+) -> TurnView:
+    """with_review: include the review (all answers plus what is missing) in any state.
+    synthetic: add the demo line after fixed text that promises contact (SYNTHETIC_ONLY)."""
     notes = notes or Notes()
     info = list(notes.info)
     if snap.state is State.GREETING and not info:
@@ -221,9 +236,9 @@ def render(snap: Snapshot, notes: Notes | None = None, resume_code: str | None =
         turn=snap.turn,
         acknowledgement=notes.acknowledgement,
         info=tuple(info),
-        question=_question(snap),
+        question=_question(snap, synthetic),
         actions=_actions(snap, notes),
         progress=_progress(snap),
-        review=_review(snap) if snap.state is State.REVIEW else None,
+        review=_review(snap) if with_review or snap.state is State.REVIEW else None,
         resume_code=resume_code if snap.state is State.PAUSED else None,
     )

@@ -2,6 +2,7 @@
 
 import hashlib
 import hmac
+import logging
 import secrets
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -9,8 +10,14 @@ from datetime import date
 from uuid import UUID, uuid4
 
 from app.config import Settings, load_region_content
+from app.domain import templates as t
+from app.domain.fields import FieldState
 from app.domain.registry import get_field
 from app.domain.requirements import applicable_fields
+from app.domain.types import InputType
+from app.guardrails import input as guard_input
+from app.guardrails import output as guard_output
+from app.guardrails import redaction
 from app.services.persistence import IntakeRepository
 from app.services.resume_codes import lookup_hash, resume_code_for
 from app.workflow import commands as c
@@ -35,10 +42,23 @@ from app.workflow.understanding import (
 )
 from app.workflow.view import TurnView, render
 
+log = logging.getLogger(__name__)
+
 
 def hash_secret(secret: str) -> str:
     """For the 256-bit demo session token (not an auth system; see README)."""
     return hashlib.sha256(secret.encode()).hexdigest()
+
+
+@dataclass(frozen=True)
+class _Read:
+    text: str
+    u: ReplyUnderstanding | None
+    events: tuple[EventRecord, ...]
+
+
+def _loggable(state: FieldState) -> set[str]:
+    return {v for v in (state.value, state.display, state.extra_text) if v}
 
 
 @dataclass(frozen=True)
@@ -53,6 +73,9 @@ class TurnResult:
     status: str  # "applied" | "stale" | "rejected" | "not_found"
     view: TurnView | None
     reason: str | None = None
+    # A rejected turn that still has text for the user ("That message is too long", retry
+    # hints). The API answers it as a normal turn; a rejection without text is a client error.
+    tells_user: bool = False
 
 
 class IntakeService:
@@ -69,18 +92,21 @@ class IntakeService:
         self._today = today
 
     def _config(self) -> EngineConfig:
+        content = load_region_content(self._settings.region)
         return EngineConfig(
             today=self._today(),
             region=self._settings.region,
             max_field_attempts=self._settings.max_field_attempts,
-            crisis=load_region_content(self._settings.region).crisis,
+            crisis=content.crisis,
+            needs_human=content.needs_human,
+            synthetic=self._settings.synthetic_only,
         )
 
     def create(self) -> Created:
         token = secrets.token_urlsafe(32)
         snap = Snapshot(id=uuid4(), state=State.GREETING)
         self._repo.create(snap, hash_secret(token), (EventRecord(type="created"),))
-        return Created(intake_id=snap.id, token=token, view=render(snap))
+        return Created(intake_id=snap.id, token=token, view=self._render(snap))
 
     def verify_token(self, intake_id: UUID, token: str) -> bool:
         stored = self._repo.token_hash(intake_id)
@@ -90,6 +116,39 @@ class IntakeService:
         code_hash = lookup_hash(code, self._secret)
         return self._repo.find_by_resume_code_hash(code_hash) if code_hash else None
 
+    def open_with_resume_code(self, code: str) -> Created | None:
+        """A resume code from a new device: issue a new token (the old one stops working)
+        and, if the intake is paused, resume it. None if the code matches no intake."""
+        intake_id = self.find_by_resume_code(code)
+        if intake_id is None:
+            return None
+        token = secrets.token_urlsafe(32)
+        self._repo.replace_token_hash(intake_id, hash_secret(token))
+        snap = self._repo.load(intake_id)
+        if snap is None:
+            return None
+        view = self._render(snap)
+        if snap.state is State.PAUSED:
+            result = self.handle(intake_id, snap.turn, c.Resume())
+            view = result.view or view
+        return Created(intake_id=intake_id, token=token, view=view)
+
+    def resume_code_on_request(self, intake_id: UUID) -> str | None:
+        """The code, any time after the intake has started (the "Take a break" area).
+        None before it has started. Asking for it makes it work at once."""
+        snap = self._repo.load(intake_id)
+        if snap is None or snap.state is State.GREETING:
+            return None
+        code = self.resume_code(intake_id)
+        code_hash = lookup_hash(code, self._secret) or ""
+        event = EventRecord(type="resume_code_shown")
+        self._repo.store_resume_code_hash(intake_id, code_hash, (event,))
+        return code
+
+    def review(self, intake_id: UUID) -> TurnView | None:
+        snap = self._repo.load(intake_id)
+        return self._render(snap, with_review=True) if snap else None
+
     def resume_code(self, intake_id: UUID) -> str:
         return resume_code_for(intake_id, self._secret)
 
@@ -97,9 +156,17 @@ class IntakeService:
         snap = self._repo.load(intake_id)
         return self._render(snap) if snap else None
 
-    def _render(self, snap: Snapshot, notes: Notes | None = None) -> TurnView:
+    def _render(
+        self, snap: Snapshot, notes: Notes | None = None, *, with_review: bool = False
+    ) -> TurnView:
         code = self.resume_code(snap.id) if snap.state is State.PAUSED else None
-        return render(snap, notes, resume_code=code)
+        return render(
+            snap,
+            notes,
+            resume_code=code,
+            with_review=with_review,
+            synthetic=self._settings.synthetic_only,
+        )
 
     @property
     def _secret(self) -> bytes:
@@ -111,21 +178,111 @@ class IntakeService:
             return TurnResult("not_found", None)
         if snap.turn != expected_turn:  # stale tab or double click: change nothing
             return TurnResult("stale", self._render(snap), "stale_turn")
+        values = {x for state in snap.answers.values() for x in _loggable(state)}
+        token = redaction.CURRENT_VALUES.set(frozenset(values))
+        try:
+            return self._handle(snap, expected_turn, command)
+        finally:
+            redaction.CURRENT_VALUES.reset(token)
+
+    def _handle(self, snap: Snapshot, expected_turn: int, command: c.Command) -> TurnResult:
         understanding: ReplyUnderstanding | None = None
-        if isinstance(command, c.Text) and needs_understanding(snap, command.text):
-            understanding = self._understander.understand(command.text, _context(snap))
-            if understanding.kind is ReplyKind.PAUSE:
+        guard_events: tuple[EventRecord, ...] = ()
+        if isinstance(command, c.Text):
+            redaction.add_values({command.text})
+            read = self._read_text(snap, command.text)
+            if isinstance(read, TurnResult):
+                return read
+            command, understanding, guard_events = c.Text(text=read.text), read.u, read.events
+            if understanding is not None and understanding.kind is ReplyKind.PAUSE:
                 command = c.Pause()
         if isinstance(command, c.Pause):
             code_hash = lookup_hash(self.resume_code(snap.id), self._secret) or ""
             command = c.Pause(resume_code_hash=code_hash)
-        result = handle(snap, command, self._config(), understanding)
+        result = handle(snap, command, self._config(), understanding, guard_events)
         if not isinstance(result, Applied):
-            return TurnResult("rejected", self._render(snap, result.notes), result.reason)
+            log.info("turn rejected", extra={"intake_id": str(snap.id), "reason": result.reason})
+            return TurnResult(
+                "rejected",
+                self._render(snap, result.notes),
+                result.reason,
+                tells_user=bool(result.notes.info),
+            )
         if not self._repo.save(result.snapshot, expected_turn, result.events):
-            current = self._repo.load(intake_id)
+            current = self._repo.load(snap.id)
             return TurnResult("stale", self._render(current) if current else None, "stale_turn")
+        log.info(
+            "turn applied",
+            extra={
+                "intake_id": str(snap.id),
+                "command": command.kind,
+                "state": result.snapshot.state.value,
+                "turn": result.snapshot.turn,
+            },
+        )
         return TurnResult("applied", self._render(result.snapshot, result.notes))
+
+    def _read_text(self, snap: Snapshot, raw: str) -> "_Read | TurnResult":
+        """Input guardrails -> (agent) -> output guardrails. Never raises."""
+        crisis = load_region_content(self._settings.region).crisis
+        screened = guard_input.screen(
+            raw, max_chars=self._settings.max_message_chars, crisis_keywords=tuple(crisis.keywords)
+        )
+        if screened.too_long:  # never sent to the LLM
+            notes = Notes(info=[t.MESSAGE_TOO_LONG])
+            return TurnResult(
+                "rejected", self._render(snap, notes), "message_too_long", tells_user=True
+            )
+        events: list[EventRecord] = []
+        if screened.flags:
+            events.append(
+                EventRecord(type="input_flagged", payload={"flags": sorted(screened.flags)})
+            )
+        if screened.crisis:  # fixed crisis response; the LLM is not asked and cannot lower it
+            events.append(EventRecord(type="crisis_keyword_matched"))
+            crisis_reply = ReplyUnderstanding(kind=ReplyKind.DISTRESS, distress_level="crisis")
+            return _Read(screened.text, crisis_reply, tuple(events))
+        if not needs_understanding(snap, screened.text):
+            return _Read(screened.text, None, tuple(events))
+        context = _context(snap)
+        reply = self._understander.understand(screened.text, context)
+        u = reply.understanding
+        self._repo.record_llm_call(
+            snap.id, "understanding", reply.call, u.kind.value if u else None
+        )
+        log.info(
+            "llm call",
+            extra={
+                "intake_id": str(snap.id),
+                "model": reply.call.model,
+                "status": reply.call.status,
+                "latency_ms": reply.call.latency_ms,
+                "attempts": reply.call.attempts,
+                "hedged": reply.call.hedged,
+                "winner": reply.call.winner,
+                "error_class": reply.call.error_class,
+                "reply_kind": u.kind.value if u else None,
+            },
+        )
+        if u is None:  # no key, timeout, outage or unreadable output: not the user's mistake
+            notes = Notes(info=list(_unavailable_text(snap)))
+            reason = "llm_" + reply.call.status
+            return TurnResult("rejected", self._render(snap, notes), reason, tells_user=True)
+        checked = guard_output.check(screened.text, u, context, screened.flags)
+        events += [
+            EventRecord(type="proposal_rejected", field_id=f, payload={"reason": r})
+            for f, r in checked.dropped
+        ]
+        return _Read(screened.text, checked.understanding, tuple(events))
+
+
+def _unavailable_text(snap: Snapshot) -> tuple[str, ...]:
+    """Point to the buttons only when the current question has them."""
+    q = current_question(snap)
+    has_buttons = isinstance(q, QueueQuestion) or (
+        isinstance(q, FieldQuestion) and q.field.input_type is InputType.CHOICE
+    )
+    return t.LLM_UNAVAILABLE_BUTTONS if has_buttons else t.LLM_UNAVAILABLE_TYPED
 
 
 def _brief(field_id: str) -> FieldBrief:

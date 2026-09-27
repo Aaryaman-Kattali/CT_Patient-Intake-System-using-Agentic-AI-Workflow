@@ -4,6 +4,7 @@ crisis text (content/regions/*.toml). Plain, literal, no blame, no exclamation m
 Placeholders use str.format. All text here is checked by tests/unit/test_wording.py.
 """
 
+import re
 from types import MappingProxyType
 
 # --- Validation retries: shown before the same question again. Never "invalid" or "wrong".
@@ -51,21 +52,55 @@ PAUSED = (
     "To come back, open this page again or use this code.",
     "Write this code down.",
 )
+# The code on request, from the Take a break area (any time after starting).
+RESUME_CODE_INFO = (
+    "With this code you can come back to your form on any device.",
+    "Write this code down.",
+)
 WELCOME_BACK = "Welcome back."
 WELCOME_BACK_NAME = "Welcome back, {name}."
 
 # --- Other reply kinds (docs/V2_SPEC.md §6.4).
 OFF_TOPIC = "I can only help with this form."
 UNSAFE = "I can only use the information for this form. I cannot send or share anything else."
+# The model worked but found nothing usable in the reply.
 NOT_UNDERSTOOD = "I did not understand. Here is the question again."
+# The model could not be used (no key, timeout, error, unreadable output). Not the user's
+# mistake. The first version is for questions with buttons, the second for typed answers.
+LLM_UNAVAILABLE_BUTTONS = (
+    "Typing is not working right now.",
+    "You can use the buttons, or take a break and come back.",
+)
+LLM_UNAVAILABLE_TYPED = (
+    "Typing is not working right now.",
+    "Please try again in a moment, or take a break and come back.",
+)
 MESSAGE_TOO_LONG = "That message is too long for me to read. You can send a shorter one."
 OVERWHELMED = (
     "This can feel like a lot. That is okay.",
     "You can take a break. Your answers are saved.",
     "You can also ask to talk to a person.",
 )
+EMAIL_SENT = "We sent an email to say we have your form."
 MANY_TRIES = "We can come back to this question later."
-NEEDS_HUMAN = "We have asked a staff member to contact you."
+# "Talk to a person": the real-clinic lines come from the region file; these follow them.
+NEEDS_HUMAN = ("Your answers are saved.", "You can keep going on your own at any time.")
+NEEDS_HUMAN_NO_CONTACT = ("Your answers are saved.", "You can keep going on your own and add one.")
+# Shown right after any fixed text that promises a human action, while SYNTHETIC_ONLY.
+DEMO_NO_CONTACT = "This is a demo. No one will contact you."
+HUMAN_PROMISE = re.compile(
+    r"\bwill\b[^.]*\b(contact|call|email)\b|\basked a staff member\b", re.IGNORECASE
+)
+
+
+def promises_contact(text: str) -> bool:
+    return text != DEMO_NO_CONTACT and HUMAN_PROMISE.search(text) is not None
+
+
+def with_demo_notice(text: str, synthetic: bool) -> str:
+    """One string (e.g. a field's `why`): the demo line is added after a promise of contact."""
+    return f"{text} {DEMO_NO_CONTACT}" if synthetic and promises_contact(text) else text
+
 
 # --- Review screen.
 REVIEW_STILL_NEEDED = "Still needed"

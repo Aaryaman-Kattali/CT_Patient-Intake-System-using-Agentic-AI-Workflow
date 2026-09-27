@@ -9,10 +9,12 @@ import re
 import pytest
 import textstat
 
+from app.api.errors import MESSAGES as ERROR_MESSAGES
 from app.config import load_region_content
 from app.domain import templates as t
 from app.domain.clinical import CONDITION_CLAIMS
 from app.domain.registry import FIELDS, get_field
+from app.services.email import BODY as EMAIL_BODY
 
 MAX_GRADE = 6.0
 MAX_QUESTION_WORDS = 15
@@ -58,15 +60,26 @@ SENTENCES = [
     t.OFF_TOPIC,
     t.UNSAFE,
     t.NOT_UNDERSTOOD,
+    *t.LLM_UNAVAILABLE_BUTTONS,
+    *t.LLM_UNAVAILABLE_TYPED,
     t.MESSAGE_TOO_LONG,
     *t.OVERWHELMED,
     t.MANY_TRIES,
-    t.NEEDS_HUMAN,
+    *t.NEEDS_HUMAN,
+    *t.NEEDS_HUMAN_NO_CONTACT,
+    t.EMAIL_SENT,
+    *ERROR_MESSAGES.values(),
+    *(line for line in EMAIL_BODY if line),
     t.REVIEW_CANNOT_SUBMIT,
     t.NEEDED_FOR_CONTACT,
     *(t.NEEDED_BECAUSE_METHOD.format(choice=o.label) for o in METHOD_OPTIONS),
     load_region_content("US").crisis.heading,
     *load_region_content("US").crisis.lines,
+    *load_region_content("US").needs_human.with_contact,
+    *load_region_content("US").needs_human.without_contact,
+    t.DEMO_NO_CONTACT,
+    *t.RESUME_CODE_INFO,
+    *load_region_content("US").needs_human.no_form,
 ]
 
 COMPOSED_QUESTIONS = [

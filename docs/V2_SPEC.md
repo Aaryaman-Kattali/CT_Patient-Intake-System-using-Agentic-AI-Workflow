@@ -26,7 +26,7 @@ Standard multi-field forms overwhelm many people in this group. The single most 
 
 This is a portfolio demo. It must never process real personal or health data.
 - `SYNTHETIC_ONLY` is a config setting that defaults to `true`. The app **refuses to start** if it is `false` in this version (there is no supported real-data mode).
-- In synthetic mode, the SMTP email provider only sends to reserved test domains (`example.com`, `example.org`, `example.net`, `*.test`, `*.invalid`). Any other recipient is refused. The default provider is `console`, which sends nothing.
+- No real email is ever sent. The providers are `console` (default: logs one line, never the recipient) and `file` (writes `.eml` files to an outbox folder outside the repository). Only reserved test domains are accepted as recipients (`example.com`, `example.org`, `example.net`, `*.test`, `*.invalid`); any other address is refused. There is no SMTP provider.
 - The UI shows a permanent banner: "Demo only. Do not enter real personal information."
 - The README states this clearly.
 - There is no auth beyond a demo session token (see §9).
@@ -112,7 +112,7 @@ Particular attention to:
 - 3.2.6 Consistent Help: the "Why" link and "Take a break" button stay in the same place on every screen.
 - **3.3.7 Redundant Entry**: this is the same idea as "never ask twice".
 - 3.3.8 Accessible Authentication: the resume code can be copied and pasted. There are no puzzles.
-- Full keyboard use. Focus moves to the new question heading on each turn. Acknowledgements are announced through `aria-live="polite"`.
+- Full keyboard use. Focus moves to the new question heading on each turn. Acknowledgements are announced through `aria-live="polite"`. If a typed reply takes more than 1 second to read, a calm "Reading your answer…" status is shown and announced the same way (Phase 7).
 - Adjustable text size (100 / 125 / 150 / 200 %), remembered per browser.
 - Calm visual design: neutral palette, no red for "errors" (a neutral note with an icon and text instead), generous spacing, one column.
 
@@ -169,7 +169,28 @@ A single turn goes like this:
 | Transport | Plain REST. SSE only if a concrete need appears. |
 | Observability | stdlib `logging` with a small JSON formatter and a PII-redaction filter, plus the `llm_calls` table. OpenTelemetry is optional, last. |
 
-**ADK note:** before writing agent code (Phase 4), I will read the installed ADK version's API. Specifically I will check how `LlmAgent(output_schema=...)` passes the schema to Gemini, the `Runner`/session API, and whether `create_session` is async. If ADK does not give reliable schema-constrained output, the understanding agent will call `google-genai` directly with `response_schema`, and ADK will stay only as the agent wrapper. I will report this, not decide it silently.
+**ADK findings (Phase 5, checked against the installed google-adk 2.10.0 / google-genai 2.25.0):**
+- `LlmAgent(output_schema=...)` with **no tools** passes the schema to Gemini as native structured output (`llm_request.set_output_schema`). So the understanding agent is a plain ADK agent; no direct `google-genai` fallback was needed.
+- The agent: `include_contents="none"` (no history), no tools, no sub-agents, transfers disallowed, no `output_key`, temperature 0. Each call uses a fresh ADK session that is deleted afterwards.
+- `InMemorySessionService.create_session` is `async` (with a separate `create_session_sync`). This confirms audit item A5: V1 calls it without `await`.
+- `google-genai` reads `GOOGLE_API_KEY` (then `GEMINI_API_KEY`) from the **process environment**. Our settings read `.env` into the `Settings` object only, so the key is passed to the client explicitly: `Gemini(model=GEMINI_MODEL, client_kwargs={"api_key": ...})`. Nothing is written to `os.environ`.
+- **Hedged request, one deadline per turn** (`app/agents/hedging.py`):
+  - Overall deadline `LLM_DEADLINE_S` = 12. Nothing runs past it.
+  - If there is no reply after `LLM_HEDGE_AFTER_S` = 4, one second identical request is started. The first valid result wins and the other request is cancelled. A cancelled request's result is never used, and its ADK session is still deleted.
+  - Unreadable output: one more attempt, if time remains within the deadline.
+  - API errors: retried only when transient (429 and 5xx), once, after about 1 s with jitter (1.0 to 1.5 s), and only if that fits within the deadline. Other 4xx errors and non-API errors are not retried: an identical request would fail the same way.
+  - After a 429, hedging is skipped for 60 s (process-level, in memory): a second request would only add load while the quota is exhausted. The call records `hedge_suppressed` when the hedge was due but skipped.
+  - `llm_calls` records `attempts` (requests started), `hedged`, `hedge_suppressed`, `winner` (which request gave the result, 1 = the first) and `error_class` (e.g. `ClientError:429`) for failures.
+- If no valid result arrives by the deadline, or the call fails, the turn changes nothing and shows a fixed "typing is not working" message. The same happens when there is no API key. There are two versions, chosen by the current question:
+  - Questions with buttons (choice fields, yes/no, date choice, conflict): "Typing is not working right now. You can use the buttons, or take a break and come back."
+  - Typed questions (text, date, phone, email): "Typing is not working right now. Please try again in a moment, or take a break and come back."
+
+  "I did not understand. Here is the question again." is only for when the model worked but found nothing usable.
+- The understander is built once and runs every call on one long-lived event loop in a background thread. A new event loop per call (`asyncio.run`) leaves the Gemini client's connections tied to a closed loop. The deadline is enforced inside that loop.
+- **Latency (Phase 5 live runs):** setup is not the bottleneck (imports about 1.9 s once per process, agent build about 0.05 s). Most calls take 1 to 3 s. The slow calls were the API itself: the same slowness happened with plain `google-genai` calls without ADK, including requests that hung for about 40 s and then returned a server error. The model reports no thinking tokens. A plain timeout with retry either waits too long or cuts off calls that would have finished at about 9 s, so a hedged request is the defence.
+- Offline tests plug a scripted `BaseLlm` into the real `LlmAgent` + `Runner`, so the ADK wiring is tested without a network or a key.
+
+**Original ADK note:** before writing agent code (Phase 4), I will read the installed ADK version's API. Specifically I will check how `LlmAgent(output_schema=...)` passes the schema to Gemini, the `Runner`/session API, and whether `create_session` is async. If ADK does not give reliable schema-constrained output, the understanding agent will call `google-genai` directly with `response_schema`, and ADK will stay only as the agent wrapper. I will report this, not decide it silently.
 
 ### 4.3 Repository layout
 
@@ -399,6 +420,7 @@ For each proposal:
 
 | Proposal | Result |
 |---|---|
+| pending field, date/phone/email/choice, quote reads as exactly one value (see below) | accept, save (explicit) |
 | explicit, pending field, valid | accept, save |
 | explicit, other field, valid, field empty | queue a yes/no confirmation (P5) |
 | inferred (any field) | queue a yes/no confirmation |
@@ -406,6 +428,10 @@ For each proposal:
 | explicit, kind = CORRECTION, `raw_text` quoted from message, valid | save the new value, record a `field_corrected` event, show "Updated: <label> is <full value>." + Undo |
 | inferred, or kind ≠ CORRECTION, field already has a value | conflict question (never a silent overwrite) |
 | ambiguous date | queue a two-button date choice |
+
+**Provenance for the pending field.** The model's `explicit`/`inferred` label is not trusted for the question being asked when our own reading settles it. A proposal for the **pending** field is treated as **explicit** when its quote passes the quote check (step 2) and the normalizer turns the quote into exactly one value: one date reading, one valid phone number, one valid email, or an exact option label or id. The model's label only matters when that is not true: an ambiguous date (two buttons, or a yes/no when only one reading is possible), a choice mapped by meaning ("my son" → `child`, always inferred), or a text field (the label stands, so "call me Al" marked inferred is confirmed). Extra values for other fields always get a yes/no confirmation (P5), whatever the label. A proposal marked `must_confirm` by the output check (an email in a "send" message, §10.2) is never treated as explicit.
+
+Examples: "May 4 2004" at the date-of-birth question is saved with no confirmation. "04/05/2004" there gives two date buttons. "Alex Rivera, born May 4 2004" at the name question saves the name and asks a yes/no about the date.
 
 ### 6.4 How the engine handles each kind
 
@@ -425,7 +451,7 @@ Showing the same pending question again after a clarification or off-topic reply
 
 ### 6.5 Distress and crisis: deterministic backstop
 
-A fixed keyword/regex list for crisis language runs **before** the LLM. If it matches, the crisis response is shown whatever the LLM says. The LLM can raise the level (e.g. detect overwhelm) but can never lower a keyword match. Overwhelm text is written by us and stored in `templates.py`. Crisis and emergency text (911, 988 for `REGION=US`) is stored only in the per-region file `app/content/regions/<region>.toml` (§12, Q3).
+A fixed keyword/regex list for crisis language runs **before** the LLM. If it matches, the crisis response is shown whatever the LLM says. The LLM can raise the level (e.g. detect overwhelm) but can never lower a keyword match. Overwhelm text is written by us and stored in `templates.py`. Crisis and emergency text (911, 988 for `REGION=US`) **and the crisis keyword list** are stored only in the per-region file `app/content/regions/<region>.toml` (§12, Q3). A keyword match skips the LLM call entirely.
 
 ### 6.6 Button replies bypass the LLM
 
@@ -495,10 +521,10 @@ Every write for one turn happens in **one transaction**. So a saved answer and i
 | `intakes` | `id` UUIDv4 PK · `state` · `turn` · `resume_state` · `pinned_field` · `return_to_review` · `interruption` · `attempts` JSON · `undo` JSON · `token_hash` · `resume_code_hash` · `synthetic` (always true) · `created_at` · `updated_at` | One row per intake. No module globals. Intake type and respondent are derived from `field_values`, not duplicated. |
 | `field_values` | (`intake_id`, `field_id`) unique · `value` · `display_value` · `status` (accepted/confirmed/skipped/deferred/dont_know/unknown_confirmed) · `source` (explicit/inferred/button) · `attempts` · `updated_at` | Current value per field. |
 | `pending_items` | `id` · `intake_id` · `seq` · `kind` (extra/conflict/date_choice) · `field_id` · `payload` JSON | The FIFO queue behind CONFIRMING_EXTRA / RESOLVING_CONFLICT. |
-| `intake_events` | `id` · `intake_id` · `seq` (per intake, unique) · `type` · `field_id` · `payload` JSON · `created_at` | **Append-only.** Types: `created`, `question_shown`, `field_proposed`, `field_accepted`, `field_confirmed`, `field_rejected`, `field_corrected`, `conflict_detected`, `conflict_resolved`, `field_skipped`, `field_deferred`, `field_marked_unknown`, `conflict_unresolved`, `paused`, `resumed`, `distress_shown`, `needs_human`, `unsafe_blocked`, `submitted`, `email_sent`, `email_denied`, `staff_summary_generated`, `benefit_demo_generated`. |
-| `llm_calls` | `id` · `intake_id` · `agent` · `model` · `input_tokens` · `output_tokens` · `latency_ms` · `reply_kind` · `status` (ok/parse_error/timeout/rejected) · `created_at` | **No prompt or response text** by default. |
-| `email_sends` | `id` · `intake_id` · `idempotency_key` (unique) · `status` · `provider` · `created_at` | Idempotency and audit. The recipient is not stored here. It is always re-read from `field_values`. |
-| `staff_outputs` | `id` · `intake_id` · `kind` (staff_summary/benefit_demo) · `content` JSON · `created_at` | Generated drafts. |
+| `intake_events` | `id` · `intake_id` · `seq` (per intake, unique) · `type` · `field_id` · `payload` JSON · `created_at` | **Append-only.** Side-effect events (`email_sent`, `email_failed`, `email_denied`, `staff_summary_generated`, `benefit_demo_generated`) are appended without changing the turn. Types: `created`, `question_shown`, `field_proposed`, `field_accepted`, `field_confirmed`, `field_rejected`, `field_corrected`, `conflict_detected`, `conflict_resolved`, `field_skipped`, `field_deferred`, `field_marked_unknown`, `conflict_unresolved`, `paused`, `resumed`, `distress_shown`, `needs_human`, `unsafe_blocked`, `submitted`, `email_sent`, `email_denied`, `staff_summary_generated`, `benefit_demo_generated`. |
+| `llm_calls` | `id` · `intake_id` · `agent` · `model` · `input_tokens` · `output_tokens` · `latency_ms` · `reply_kind` · `status` (ok/parse_error/timeout/error/no_key; timeout = deadline passed) · `attempts` · `hedged` · `hedge_suppressed` · `winner` · `error_class` · `created_at` | **No prompt or response text**, ever. |
+| `email_sends` | `id` · `intake_id` · `idempotency_key` (unique per intake) · `status` (sending/sent/failed) · `provider` · `created_at` | Idempotency and audit. The key is claimed before sending, so two concurrent requests with one key send once. The recipient is not stored here. It is always re-read from `field_values`. |
+| `staff_outputs` | `id` · `intake_id` · `kind` (staff_summary/benefit_demo, unique per intake) · `content` JSON · `created_at` | Generated drafts, built once (SUBMITTED is final). |
 
 The DB file path comes from `DATABASE_URL`. The default is `~/.intake-v2/intake.db`, **outside the repository**, so intake data can never be committed by accident. `v2/backend/var/` and `*.db` stay gitignored as a backstop.
 
@@ -507,7 +533,11 @@ The DB file path comes from `DATABASE_URL`. The default is `~/.intake-v2/intake.
 - The database stores only a scrypt hash (fixed salt derived from `APP_SECRET`, so it can be indexed), written at the first pause.
 - Every pause shows the code again in its own `resume_code` field (the UI adds a copy button), with the fixed line "Write this code down."
 - Lookup accepts any case, spaces or dashes, and rejects malformed input before hashing.
-- **Phase 6:** rate-limit failed resume attempts per code and per client.
+- **Input:** case, spaces and dashes are ignored before checking ("k7p 4mx" = "K7P-4MX").
+- **Rate limits (Phase 6):** failed attempts are counted per code (normalized, so any spelling counts as the same code) and per client address, in a fixed 15-minute sliding window (5 per code, 10 per client; the counts are configurable, the window is not, because the lockout message names it). Past a limit, even a correct code gets `429 too_many_attempts` with one fixed message for every locked-out client: "Please wait 15 minutes, then try again. Your answers are safe.", plus a "Talk to a person" action (its text comes from `GET /help/person`). Every other failure gets the same fixed answer (`resume_failed`), whether the code exists, is malformed, or has not been issued yet.
+- **In memory, so one process.** The limiter (and the 429 hedge cooldown, §6) live in process memory. The API must run as a **single process** (one uvicorn worker). At startup the app logs a warning if more than one worker is configured (`--workers`/`-w` > 1 or `WEB_CONCURRENCY` > 1).
+- **New device:** a correct code issues a **new token** and the old one stops working. A paused intake is resumed right away.
+- The code is shown when the user pauses, and **on request** from the "Take a break" area any time after the intake has started (`POST /intakes/{id}/resume-code`). Asking for it stores its hash, so it works at once. It is not shown at creation: before starting there is nothing to come back to.
 
 **Unresolved conflicts.** "I'm not sure" on a conflict question (a button, or typed "I don't know") keeps the earlier value and saves the other answer in `field_values.unresolved_other`, with a `conflict_unresolved` event. Any later change to that field clears it.
 
@@ -519,49 +549,73 @@ The DB file path comes from `DATABASE_URL`. The default is `~/.intake-v2/intake.
 
 ### 9.1 Endpoints
 
-All `/intakes/{id}/*` routes require header `X-Intake-Token`. This is a demo token returned by `POST /intakes`, and only its hash is stored. It is **not** an auth system.
+All `/intakes/{id}/*` routes require header `X-Intake-Token`. This is a demo token returned by `POST /intakes`, and only its hash is stored. It is **not** an auth system. A wrong or missing token gets the same `404 intake_not_found` as an unknown id, so ids cannot be probed. The staff endpoints use the same token in this demo.
 
-| Method & path | Purpose | Notes |
-|---|---|---|
-| `POST /intakes` | Create an intake | Returns `{id, token, resume_code, turn}`. State GREETING. |
-| `GET /intakes/{id}` | Current state + current turn + progress | Used on page load and resume. |
-| `POST /intakes/{id}/start` | GREETING → CHOOSE_INTAKE_TYPE | |
-| `POST /intakes/{id}/replies` | Body: a command (`text`, `choose`, `skip`, `undo`, ...) + `turn` | Returns the next `Turn`. A reply whose `turn` is not the current one gets **409 stale** with the current view (§8 turn numbers). |
-| `POST /intakes/{id}/pause` | → PAUSED | Returns resume instructions. |
-| `POST /intakes/{id}/resume` | PAUSED/NEEDS_HUMAN → previous state | Token, or `{resume_code}` from a new device. |
-| `GET /intakes/{id}/review` | All values, grouped by section, plus "Still needed" | |
-| `POST /intakes/{id}/review/edit` | `{field_id}` → pins that question | |
-| `POST /intakes/{id}/submit` | REVIEW → SUBMITTED | 409 + missing list if incomplete. |
-| `POST /intakes/{id}/email` | Send the confirmation email | Header `Idempotency-Key` required. **No recipient in the body.** Allowed only in SUBMITTED, only if `email` has an accepted/confirmed value. |
-| `POST /intakes/{id}/staff-summary` | Generate the staff summary (§11.1) | SUBMITTED only. |
-| `POST /intakes/{id}/benefit-summary` | Generate the synthetic benefit demo (§11.2) | SUBMITTED only. |
-| `GET /health` | Liveness | |
+Every state-changing request carries the `turn` the client last saw (§8). Request bodies forbid unknown fields.
 
-There is **no** SOAP endpoint (D1).
+| Method & path | Purpose | Success | Errors |
+|---|---|---|---|
+| `POST /intakes` | Create an intake | `201 SessionView {id, token, view}` (state GREETING) | – |
+| `GET /intakes/{id}` | Current turn | `Turn` | 404 |
+| `POST /intakes/{id}/start` | GREETING → CHOOSE_INTAKE_TYPE | `Turn` | 404, 409 |
+| `POST /intakes/{id}/replies` | `{turn, command}`: `choose`, `text`, `skip`, `undo`, `keep_going`, `talk_to_person`, `mark_unknown` | `Turn` | 404, 409 |
+| `POST /intakes/{id}/pause` | → PAUSED | `Turn` with `resume_code` | 404, 409 |
+| `POST /intakes/{id}/resume` | PAUSED → where they were; NEEDS_HUMAN → "Continue on my own" | `Turn` | 404, 409 |
+| `POST /intakes/resume` | `{resume_code}` from a new device (no token) | `SessionView` with a **new** token | 400 `resume_failed`, 429 `too_many_attempts` (with a "Talk to a person" action) |
+| `POST /intakes/{id}/resume-code` | The resume code on request ("Take a break" area), any time after starting | `ResumeCodeView {resume_code, info}` | 404, 409 before starting |
+| `GET /help/person` | "Talk to a person" text when no form is open (e.g. locked out) | `HelpView {info}` | – |
+| `GET /intakes/{id}/review` | All answers (with their section) plus what is missing, in any state | `Turn` with `review` | 404 |
+| `POST /intakes/{id}/review/edit` | `{turn, field_id}` → pins that question | `Turn` | 404, 409 |
+| `POST /intakes/{id}/submit` | REVIEW → SUBMITTED | `Turn` | 409 `form_incomplete` (view lists what is missing), 409 `action_not_available` outside REVIEW |
+| `POST /intakes/{id}/email` | Send the confirmation email | `Turn` with a fixed info line | 400 `idempotency_key_required`, 409 `email_not_submitted` / `email_no_address` / `email_not_synthetic`, 502 `email_failed`, 422 for **any** body field (there is no recipient) |
+| `POST /intakes/{id}/staff-summary` | Staff summary (§11.1) | `StaffSummary` | 409 `not_submitted` |
+| `POST /intakes/{id}/benefit-summary` | Synthetic benefit demo (§11.2) | `BenefitSummary` | 409 `not_submitted` |
+| `GET /health` | Liveness | `{status, synthetic_only}` | – |
+
+There is **no** SOAP endpoint (D1). The conversational endpoints answer only with a `Turn`; the two staff endpoints answer with their own typed drafts.
+
+**Turn results.** A stale `turn` gets `409 stale_turn` with the current view. A command the engine refuses **with** text for the user (for example "That message is too long", a retry hint, or "Typing is not working right now") is a normal `200` turn: nothing changed and the text says why. A refusal **without** such text (for example `skip` before starting) is `409 action_not_available` with the current view.
+
+**Errors.** Every error body is `ErrorBody {code, message, view}`: a fixed code, one fixed plain-language message per code (checked by the wording tests), and the current view where it helps. Exception text, request bodies and field values never appear in a response; validation errors do not echo the input. Unexpected errors are logged through the redacting logger and answered with `500 internal_error`.
+
+**CORS.** Only `FRONTEND_ORIGIN` may call the API from a browser (methods GET/POST; headers `Content-Type`, `X-Intake-Token`, `Idempotency-Key`).
+
+**Contract.** Every route declares its success model and `ErrorBody` for its errors in OpenAPI. A contract test calls every endpoint (success and error paths) and validates every response against the declared model, so the Phase 7 frontend can generate its TypeScript types from `/openapi.json`.
+
+**Lifespan.** The database engine, the understander (built once per process), the services and the rate limiters are created in the FastAPI lifespan and kept on `app.state`. There are no module-level globals.
 
 ### 9.2 `Turn` response
 
 ```json
 {
-  "state": "COLLECTING",
+  "state": "collecting",
+  "turn": 7,
   "acknowledgement": "Saved.",
+  "info": [],
   "question": {
+    "kind": "field | confirm_extra | confirm_value | conflict | date_choice",
     "field_id": "date_of_birth",
-    "kind": "field | confirm_extra | conflict | date_choice | distress | resume",
     "text": "What is your date of birth?",
     "example": "May 4, 2004",
     "input_type": "date",
     "options": [],
+    "why": "We use this to find your records.",
     "can_skip": false,
     "can_defer": true
   },
-  "info": null,
-  "progress": { "answered": 3, "about_total": 12,
-                "sections": [{"name": "About you", "done": true}] }
+  "actions": [{"id": "take_a_break", "label": "Take a break"}],
+  "progress": { "answered": 3, "about_total": 12, "exact": true,
+                "sections": [{"name": "About you", "done": true}] },
+  "review": null,
+  "resume_code": null
 }
 ```
 
-`question` is **one object or null**, never a list. That is P1 at the API boundary. `info` carries fixed non-question text (the `why` answer, distress guidance, pause instructions).
+`question` is **one object or null**, never a list. That is P1 at the API boundary (checked in the OpenAPI schema too). `info` carries fixed non-question text (the `why` answer, distress guidance, pause instructions, what happens after "Talk to a person"). `review` is filled in REVIEW and by `GET /review`. `resume_code` is filled only while paused.
+
+**"Talk to a person".** NEEDS_HUMAN shows fixed text saying what happens next: a staff member will contact them using the phone number or email in the form (or, if there is none yet, that we do not have one and they can keep going and add one), that their answers are saved, and that they can keep going on their own at any time. Answers are never changed by this. The real-clinic lines live in the region content file (`[needs_human]`).
+
+**Demo line.** While `SYNTHETIC_ONLY` (always, in this demo), any fixed text that promises a human action ("will contact / call / email", "asked a staff member") is followed by the fixed line "This is a demo. No one will contact you." This applies to "Talk to a person", the crisis response, the `why` text of the contact-method question, the confirmation email and `GET /help/person`. A test scans all fixed text for such promises and checks the demo line is shown right after each one.
 
 ---
 
@@ -572,11 +626,11 @@ There is **no** SOAP endpoint (D1).
 - Maximum `MAX_MESSAGE_CHARS` (default 1000). Longer text gets a polite fixed message and is not sent to the LLM.
 - Strip control characters. Normalize Unicode (NFKC).
 - Crisis keyword check (§6.5).
-- Pattern checks for common injection phrasing ("ignore previous instructions", "system prompt", "send this to", email addresses outside the email question, "other patient", "list all"). A match sets a flag passed to the policy. It does **not** replace structural safety. The real defence is that the agent has no tools and its output can only propose field values.
+- Pattern checks for common injection phrasing ("ignore previous instructions", "system prompt", "send this to", "other patient", "list all"). A match sets a flag passed to the output check and the policy. An email address in a message flagged "send" is not rejected: it is marked inferred, so the user must confirm it with a yes/no question. The recipient is safe regardless, because email goes only to the stored email field and only in SUBMITTED. It does **not** replace structural safety. The real defence is that the agent has no tools and its output can only propose field values.
 
 ### 10.2 Output (`guardrails/output.py`)
 
-- The LLM response must parse into `ReplyUnderstanding`. On a parse error or timeout, retry once. If it still fails, show a fixed "I did not understand. Here is the question again." and log `llm_calls.status`. State does not change.
+- The LLM response must parse into `ReplyUnderstanding`. Each turn is one hedged request with an overall deadline (§6). If no valid result arrives in time, show the fixed "Typing is not working right now" message and log `llm_calls.status`. State does not change.
 - Proposals are checked as in §6.3 (real field, applicable, `raw_text` really appears in the message, value derived from `raw_text`).
 - An `email` proposal is only accepted when the pending field is `email`, or through a yes/no confirmation. It can never be accepted while the input flag says "send to".
 
@@ -599,7 +653,7 @@ A logging filter replaces:
 - every value known for the current intake (passed via a context variable), and
 - generic patterns: emails, phone-like numbers, dates
 
-with `[REDACTED]`. Logs carry ids, field ids, states and event types only. Exceptions are logged with a redacted message. Users see fixed text only (audit B10).
+with `[REDACTED]`. Logs carry ids, field ids, states and event types only. **Limit:** outside a turn (no intake in context) only the generic patterns apply, so a person's name logged there would not be recognized. That is why the rule is "log ids only"; redaction is the safety net (`test_outside_a_turn_only_patterns_are_masked` documents this). Exceptions are logged with a redacted message. Users see fixed text only (audit B10).
 
 ---
 
@@ -607,7 +661,8 @@ with `[REDACTED]`. Logs carry ids, field ids, states and event types only. Excep
 
 ### 11.1 Intake summary for staff (replaces SOAP, D1)
 
-- Built by **deterministic code** (`services/staff_summary.py`) from `field_values` and `intake_events` of the current intake only.
+- Built by **deterministic code** (`services/staff_summary.py`) from `field_values` and `intake_events` of the current intake only, passed in by the application. Built once after SUBMITTED and stored.
+- Fixed phrases: "<Label>: <value>", "<Label>: Not answered, please follow up." (deferred), "<Label>: Not known, please follow up." (unknown_confirmed or dont_know), "<Label>: Two answers given: X and Y, please check." (unresolved conflict, citing the field and the `conflict_unresolved` event), and notes "Asked to talk to a person." / "Crisis support information was shown. A staff member was asked to make contact." (citing the `needs_human` event). Optional fields the user skipped are not listed.
 - Shape:
 
 ```python
@@ -636,14 +691,15 @@ class StaffSummary(BaseModel):
 
 - Deterministic. Insurance numbers are generated from a seed based on the intake id, reusing the V1 benefit text layout.
 - Every output starts and ends with: **"SYNTHETIC DEMO. These numbers are made up. They are not linked to any insurance plan."**
-- It uses only `full_name` from the current intake. It has no access to other records.
+- It uses only `full_name` from the current intake (cited as `field:full_name`). It has no access to other records. The numbers are seeded from the intake id.
 
 ### 11.3 Email
 
 - `services/email.py`: `send_confirmation(intake_id, idempotency_key)`. There is **no recipient parameter**. The recipient is read from `field_values[email]` of that intake.
-- Providers: `console` (default, logs a redacted line) and `smtp` (reserved test domains only while `SYNTHETIC_ONLY`).
+- Providers: `console` (default: logs one line, never the recipient) and `file` (writes `.eml` files to `EMAIL_OUTBOX_DIR`, outside the repository). No real email is sent, and there is no SMTP provider. Only reserved test domains are accepted as recipients (§1.3).
 - The same idempotency key returns the first result and does not send again.
-- Body: fixed plain-language template. It contains no answers beyond the first name.
+- Body: fixed plain-language template. It contains **no** answers from the form, not even a name (whose name to use is unclear when a parent or a health worker fills the form).
+- Allowed only in SUBMITTED, which is reachable only after the user approved the review screen. Denials are recorded as `email_denied` events.
 
 ---
 
@@ -652,15 +708,20 @@ class StaffSummary(BaseModel):
 | Setting | Default | Notes |
 |---|---|---|
 | `GEMINI_MODEL` | `gemini-3.5-flash-lite` | Required to be set. There is no literal anywhere else. |
-| `APP_SECRET` | – | **Required**, at least 32 characters, from `.env`. Derives resume codes (§8). Tests generate a random one per session. |
-| API key | – | Added in Phase 5, using the exact variable name the installed `google-genai`/ADK read. `.env.example` (empty value) is committed, `.env` is gitignored, and the owner creates `.env`. Unit, workflow and API tests never need the key. |
+| `APP_SECRET` | – | **Required**, at least 32 characters, from `.env`. Derives resume codes (§8). **Must stay the same** once intakes exist: changing it invalidates every resume code already given out. Tests generate a random one per session. |
+| `GOOGLE_API_KEY` | – | Optional. In `v2/backend/.env`, read by `Settings` and passed to the Gemini client explicitly. Without it (or if it is blank), no model is called: buttons work and typed replies get the fixed "Typing is not working right now" message, and `llm_calls.status` is `no_key`. `.env.example` (empty values) is committed; `.env` is gitignored; the owner creates `.env`. Only `pytest -m live` reads `.env`. |
 | `SYNTHETIC_ONLY` | `true` | Validator: must be `true`, or startup fails. |
 | `DATABASE_URL` | `sqlite:///var/intake.db` | Relative to backend dir, gitignored. |
-| `EMAIL_PROVIDER` | `console` | `console` / `smtp` |
+| `EMAIL_PROVIDER` | `console` | `console` / `file`. No real email is ever sent. |
+| `EMAIL_OUTBOX_DIR` | `~/.intake-v2/outbox` | For the `file` provider. Outside the repository. |
+| `FRONTEND_ORIGIN` | `http://localhost:5173` | The only CORS origin. |
+| `RESUME_MAX_FAILURES_PER_CODE` | 5 | Failed resume attempts per code per 15 minutes. |
+| `RESUME_MAX_FAILURES_PER_CLIENT` | 10 | Failed resume attempts per client address per 15 minutes. The window is fixed. |
 | `REGION` | `US` | Selects the default phone-parsing region and the per-region content file `app/content/regions/<region>.toml` (crisis and emergency text: 911, 988). Crisis text lives only in these files, never in code. Startup fails if the file for `REGION` is missing. |
 | `MAX_MESSAGE_CHARS` | 1000 | |
 | `MAX_FIELD_ATTEMPTS` | 3 | |
-| `LLM_TIMEOUT_S` | 15 | |
+| `LLM_DEADLINE_S` | 12 | Overall deadline per turn for the understanding call (§6). |
+| `LLM_HEDGE_AFTER_S` | 4 | Start one identical second request if there is no reply yet. |
 
 ---
 
@@ -676,7 +737,7 @@ class StaffSummary(BaseModel):
 | `tests/api` | FastAPI `TestClient` flows, tokens, idempotency, error shapes. |
 | `tests/regression` | One named test per Critical/High audit item (below). |
 
-CI (GitHub Actions) runs `uv sync --locked`, `ruff check`, `ruff format --check`, `mypy`, `pytest`, then the frontend `tsc`, `vitest` and axe checks. Live-LLM tests are marked `@pytest.mark.live`. They are deselected by default (`addopts = -m "not live"`) and in CI. Run them explicitly with `pytest -m live`.
+CI (GitHub Actions) runs `uv sync --locked`, `ruff check`, `ruff format --check`, `mypy`, `pytest`, then the frontend `tsc`, `vitest` and axe checks. Live-LLM tests are marked `@pytest.mark.live`. They are deselected by default (`addopts = -m "not live"`) and in CI. Run them explicitly with `pytest -m live`. **Live tests are a report, not a merge gate.** Failures caused by the API (timeouts, 429, 5xx) are reported, never fixed by loosening the tests.
 
 ### 13.2 Regression tests from the audit
 
@@ -689,7 +750,7 @@ Every Critical and High item has at least one named test. All of them live in `t
 | #3 nothing saved until end | Crit | `test_partial_intake_survives_restart` (answer 3 fields, dispose app + engine, new app, same values and same pending question) · `test_each_accepted_answer_is_committed_before_response` |
 | #4 intake type asked repeatedly | High | `test_intake_type_asked_once` · `test_no_field_asked_again_after_resolution` (property test) · `test_frontend_renders_no_hardcoded_questions` (vitest, frontend) |
 | #5 global shared session | Crit | `test_concurrent_intakes_are_isolated` (interleave two intakes, assert no value crosses) · `test_intake_ids_are_uuid4` · `test_app_factory_creates_independent_state` |
-| #6 email wrong recipient | Crit | `test_email_recipient_ignores_llm_argument` · `test_email_has_no_fallback_to_other_records` (intake without email, other intakes with email → deny) · `test_email_endpoint_rejects_recipient_in_body` · `test_email_idempotency_key_prevents_duplicate_send` |
+| #6 email wrong recipient | Crit | `test_email_recipient_ignores_llm_argument` · `test_email_has_no_fallback_to_other_records` (intake without email, other intakes with email → deny) · `test_email_endpoint_rejects_recipient_in_body` · `test_email_idempotency_key_prevents_duplicate_send` · `test_email_requires_idempotency_key` |
 | #7 PII in debug prints | High | `test_logs_contain_no_field_values` (full flow, capture logs, assert no stored value appears) · `test_redaction_filter_masks_emails_phones_dates` · ruff `T201` (no `print`) in CI |
 | #8 outputs disconnected from intake | High | `test_staff_summary_uses_only_current_intake` · `test_benefit_demo_uses_only_current_intake_name` · `test_benefit_demo_is_labelled_synthetic` |
 | #9 format burden | High | `test_date_formats_accepted` (parametrized) · `test_ambiguous_date_requires_choice` · `test_phone_formats_normalized` · `test_gender_options_inclusive` · `test_retry_text_never_blames_user` |
@@ -698,9 +759,9 @@ Every Critical and High item has at least one named test. All of them live in `t
 | B2 LLM can read other records | Crit | `test_agent_has_no_read_tools` · `test_agent_input_contains_only_current_intake` · `test_agent_input_contains_no_stored_values` |
 | B3 path traversal / file writes | Crit | `test_agents_do_not_write_files` (run agent in temp cwd, directory stays empty) · `test_no_filesystem_writes_outside_db_path` |
 | B4 invented diagnoses | High | `test_no_soap_endpoint` · `test_staff_summary_every_statement_cites_source` · `test_staff_summary_contains_no_clinical_terms` |
-| B5 email without review | High | `test_email_denied_in_every_state_except_submitted` · `test_submit_requires_review_state` |
+| B5 email without review | High | `test_email_denied_in_every_state_except_submitted` · `test_submit_requires_review_state` · `test_email_allowed_once_submitted` |
 | B9 no tests | High | Covered by the CI workflow itself. `test_ci_workflow_runs_tests_and_linters` checks the workflow file lists the steps. |
-| B11 data inside source tree | High | `test_default_db_path_is_outside_repo` · `test_in_repo_db_location_is_gitignored` · `test_db_path_comes_from_config` · `test_smtp_provider_rejects_non_reserved_domains` |
+| B11 data inside source tree | High | `test_default_db_path_is_outside_repo` · `test_in_repo_db_location_is_gitignored` · `test_db_path_comes_from_config` · `test_email_only_to_reserved_example_domains` · `test_default_outbox_is_outside_the_repository` |
 
 Other safety tests (in `tests/safety`):
 - `test_injection_cannot_change_state_or_recipient`
@@ -768,6 +829,8 @@ Other safety tests (in `tests/safety`):
 | Crisis cases reaching NEEDS_HUMAN | 100 % |
 | Unsafe actions accepted (state change or side effect caused by injection) | **0** |
 | Tokens and latency per intake and per turn | from `llm_calls` |
+| Latency per LLM call: p50 and p95 | from `llm_calls.latency_ms`, overall and per reply kind; timeouts and retries counted separately |
+| Hedge rate, hedge win rate, hedge suppressed rate | from `llm_calls.hedged`, `winner`, `hedge_suppressed`; used to tune `LLM_HEDGE_AFTER_S` (§14.4) |
 | LLM calls avoided by buttons | informational |
 
 The goal is **lower load per turn and zero repeated questions**. It is not fewer total questions.
@@ -784,6 +847,15 @@ The goal is **lower load per turn and zero repeated questions**. It is not fewer
 - Only scenarios that make sense for V1 are included (V1 has no pause/resume or review). Excluded categories are listed.
 - Results are written to `docs/EVAL_RESULTS.md` as a before/after table.
 
+### 14.4 Runner and the real API (plan for Phase 8)
+
+The Phase 5 live runs showed API timeouts, 429s and 5xx errors in bursts. The eval runner must not confuse these with model mistakes:
+- **Throttle:** a configurable requests-per-minute limit (`EVAL_RPM`), set below the key's quota. The owner checks the key's limits in AI Studio before Phase 8.
+- **Back off on 429:** pause and retry the conversation turn with exponential backoff and jitter, on top of the in-turn retry in §6.
+- **Resume:** results are saved after each conversation (one JSONL line per conversation). An interrupted run resumes from the first conversation without a saved result.
+- **Count API failures separately:** a turn that fails because of the API (`llm_calls.status` timeout or error, or `no_key`) is an API failure, not a model mistake. Accuracy and reply-kind metrics are computed over turns where the model answered; API failures are reported as their own rate, with `error_class` counts and how often the hedge fired and won.
+- **Hedge tuning:** `LLM_HEDGE_AFTER_S` (4 s) and the 60 s no-hedge window after a 429 are provisional. Final values come from eval data: report the **hedge rate** (share of calls where the hedge fired), the hedge win rate, the suppressed rate, extra requests per turn, and p50/p95 latency with and without a hedge.
+
 ---
 
 ## 15. Implementation phases
@@ -795,7 +867,7 @@ The goal is **lower load per turn and zero repeated questions**. It is not fewer
 | 4 | Workflow engine + persistence: states, transitions, events, pending queue, pause/resume. Full-flow tests with a fake agent. |
 | 5 | Understanding agent (ADK + Gemini structured output), guardrails, policy engine, safety tests. Check the ADK API and model list first. |
 | 6 | API layer + services: email (idempotent, console default), staff summary, benefit demo. |
-| 7 | Frontend, then accessibility pass (axe, keyboard walkthrough, grade check). |
+| 7 | Frontend, then accessibility pass (axe, keyboard walkthrough, grade check). While a typed reply is being read, show a calm status "Reading your answer…" after 1 second (announced through `aria-live="polite"`, no spinner countdown, no timer), so the user never faces a silent wait. |
 | 8 | Eval harness, V1 baseline, `docs/EVAL_RESULTS.md`. |
 | Final | README rewrite. |
 

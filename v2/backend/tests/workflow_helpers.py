@@ -12,8 +12,11 @@ from app.services.persistence import IntakeRepository, create_db_engine
 from app.workflow import commands as c
 from app.workflow.engine import Applied, EngineConfig, handle
 from app.workflow.snapshot import EventRecord, Snapshot
+from app.workflow.states import State
 from app.workflow.understanding import (
+    AgentReply,
     FieldProposal,
+    LlmCallInfo,
     ReplyKind,
     ReplyUnderstanding,
     UnderstandingContext,
@@ -75,15 +78,21 @@ def understood(
     return ReplyUnderstanding(kind=kind, proposals=tuple(props), **extra)
 
 
+FAKE_CALL = LlmCallInfo(model="fake", input_tokens=1, output_tokens=1, latency_ms=0, status="ok")
+
+
 class FakeUnderstander:
     """Answers the pending question with the message itself, unless a result is queued."""
 
     def __init__(self) -> None:
-        self.queued: deque[ReplyUnderstanding] = deque()
+        self.queued: deque[ReplyUnderstanding | None] = deque()
         self.calls: list[tuple[str, UnderstandingContext]] = []
 
-    def understand(self, message: str, context: UnderstandingContext) -> ReplyUnderstanding:
+    def understand(self, message: str, context: UnderstandingContext) -> AgentReply:
         self.calls.append((message, context))
+        return AgentReply(understanding=self._reply(message, context), call=FAKE_CALL)
+
+    def _reply(self, message: str, context: UnderstandingContext) -> ReplyUnderstanding | None:
         if self.queued:
             return self.queued.popleft()
         if context.pending is None:
@@ -177,6 +186,19 @@ class Driver:
         )
 
 
+def advance_to(d: Driver, field_id: str, book: dict[str, str] = FI_SELF_BOOK) -> None:
+    """Answer from the book until the given field's question is showing."""
+    if d.view.state is State.GREETING:
+        d.send(c.Start())
+    for _ in range(30):
+        q = d.view.question
+        assert q is not None, d.view
+        if q.field_id == field_id and q.kind == "field":
+            return
+        d.answer(book[q.field_id])
+    raise AssertionError(f"never reached {field_id}")
+
+
 class EngineHarness:
     """The pure engine without a database, for fast property tests."""
 
@@ -184,8 +206,13 @@ class EngineHarness:
         self.snap = snap
         self.events: list[EventRecord] = []
         self.view = render(snap)
+        content = load_region_content("US")
         self.config = EngineConfig(
-            today=TODAY, region="US", max_field_attempts=3, crisis=load_region_content("US").crisis
+            today=TODAY,
+            region="US",
+            max_field_attempts=3,
+            crisis=content.crisis,
+            needs_human=content.needs_human,
         )
 
     def send(self, command: c.Command, u: ReplyUnderstanding | None = None) -> bool:

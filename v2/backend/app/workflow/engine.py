@@ -9,7 +9,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date
 
-from app.config import CrisisContent
+from app.config import CrisisContent, NeedsHumanContent
 from app.domain import templates as t
 from app.domain.fields import FieldDef, FieldState, answer_value
 from app.domain.normalizers import match_yes_no
@@ -26,7 +26,6 @@ from app.domain.parsing import (
 from app.domain.registry import BY_ID, get_field
 from app.domain.requirements import (
     can_mark_unknown,
-    can_submit,
     is_applicable,
     is_needed,
     missing_must_have,
@@ -34,6 +33,8 @@ from app.domain.requirements import (
     not_sure_outcome,
 )
 from app.domain.types import FieldStatus, InputType, Source
+from app.guardrails import policy
+from app.guardrails.policy import Verdict
 from app.workflow import commands as c
 from app.workflow.snapshot import (
     Choice,
@@ -54,6 +55,8 @@ class EngineConfig:
     region: str
     max_field_attempts: int
     crisis: CrisisContent
+    needs_human: NeedsHumanContent
+    synthetic: bool = True  # adds the "no one will contact you" demo line
 
 
 @dataclass
@@ -240,8 +243,11 @@ def handle(
     command: c.Command,
     config: EngineConfig,
     understanding: ReplyUnderstanding | None = None,
+    guard_events: tuple[EventRecord, ...] = (),
 ) -> Result:
+    """guard_events: what the input/output guardrails did this turn, kept for the audit."""
     turn = _Turn(snap, config)
+    turn.events.extend(guard_events)
     match command:
         case c.Start():
             return _guarded(turn, Trigger.START, lambda: turn.finish(Trigger.START))
@@ -450,7 +456,10 @@ def _clarify(turn: _Turn, q: CurrentQuestion | None, u: ReplyUnderstanding) -> R
     if q is None:
         return _reject("no_question")
     fld = get_field(q.item.field_id) if isinstance(q, QueueQuestion) else q.field
-    turn.notes.info.append(fld.why if u.clarification == "why" else fld.help)
+    text = fld.why if u.clarification == "why" else fld.help
+    turn.notes.info.append(text)
+    if turn.config.synthetic and t.promises_contact(text):
+        turn.notes.info.append(t.DEMO_NO_CONTACT)
     turn.event("clarification_shown", fld.id, reason=u.clarification or "meaning")
     return turn.finish(Trigger.INFO, turn.start.state)
 
@@ -479,7 +488,7 @@ def _answer(turn: _Turn, q: CurrentQuestion | None, u: ReplyUnderstanding) -> Re
     extras = [p for p in u.proposals if p.field_id != fld.id]
     changed = False
     if main:
-        reading = _interpret(fld, main[0], turn.config)
+        reading = _interpret(fld, main[0], turn.config, pending=True)
         if reading is None:  # the agent's value does not match its own quote
             turn.event("proposal_rejected", fld.id, reason="value_not_in_quote")
         elif isinstance(reading[0], Retry):
@@ -505,18 +514,32 @@ def _order(field_id: str) -> int:
 Reading = tuple[ParseResult, Source]
 
 
-def _interpret(fld: FieldDef, p: FieldProposal, config: EngineConfig) -> Reading | None:
+_ONE_READING_TYPES = frozenset({InputType.DATE, InputType.PHONE, InputType.EMAIL})
+
+
+def _interpret(
+    fld: FieldDef, p: FieldProposal, config: EngineConfig, *, pending: bool
+) -> Reading | None:
     """Derive the value from the quoted text with our own parsers (spec §6.3 step 3).
 
     Returns None when the agent's value disagrees with its own quote (hallucination).
     """
     stated = Source.EXPLICIT if p.source == "explicit" else Source.INFERRED
     if fld.input_type is InputType.CHOICE:
-        return _interpret_choice(fld, p, stated)
+        return _interpret_choice(fld, p, stated, pending=pending)
     parsed = parse_answer(fld, p.raw_text, today=config.today, region=config.region)
     if isinstance(parsed, Parsed) and not _agrees(fld, p, parsed, config):
         return None
-    return parsed, stated
+    one_reading = isinstance(parsed, Parsed) and fld.input_type in _ONE_READING_TYPES
+    return parsed, _provenance(p, stated, pending=pending, one_reading=one_reading)
+
+
+def _provenance(p: FieldProposal, stated: Source, *, pending: bool, one_reading: bool) -> Source:
+    """Spec §6.3 step 5: for the question being asked, a quote that our normalizer reads as
+    exactly one value is explicit, whatever the model's label. Otherwise the label stands."""
+    if pending and one_reading and not p.must_confirm:
+        return Source.EXPLICIT
+    return stated
 
 
 def _agrees(fld: FieldDef, p: FieldProposal, parsed: Parsed, config: EngineConfig) -> bool:
@@ -529,10 +552,11 @@ def _agrees(fld: FieldDef, p: FieldProposal, parsed: Parsed, config: EngineConfi
     return True  # e.g. the LLM wrote an ISO date we cannot re-read: the quote decides
 
 
-def _interpret_choice(fld: FieldDef, p: FieldProposal, stated: Source) -> Reading:
+def _interpret_choice(fld: FieldDef, p: FieldProposal, stated: Source, *, pending: bool) -> Reading:
     exact = match_option(fld, p.raw_text)
     if exact is not None and not exact.free_text and exact.special is None:
-        return Parsed(exact.id, exact.label), stated  # the user typed the option itself
+        source = _provenance(p, stated, pending=pending, one_reading=True)
+        return Parsed(exact.id, exact.label), source  # the user typed the option itself
     option = fld.option(p.value)
     if option is None or option.special is not None:
         return Retry("choose_option"), Source.INFERRED
@@ -542,11 +566,17 @@ def _interpret_choice(fld: FieldDef, p: FieldProposal, stated: Source) -> Readin
 
 
 def _apply_main(turn: _Turn, fld: FieldDef, outcome: ParseResult, source: Source) -> None:
-    if isinstance(outcome, Parsed) and source is Source.EXPLICIT:
-        turn.accept(fld, outcome, source, FieldStatus.ACCEPTED)
-    elif isinstance(outcome, Parsed):
-        turn.queue.insert(0, _pending(PendingKind.CONFIRM_VALUE, fld, outcome, Source.INFERRED))
-        turn.event("field_proposed", fld.id, source="inferred")
+    if isinstance(outcome, Parsed):
+        decision = policy.decide(
+            turn.start.state, turn.answers, policy.AcceptValue(fld.id, source, is_extra=False)
+        )
+        if decision.allowed:
+            turn.accept(fld, outcome, source, FieldStatus.ACCEPTED)
+        elif decision.verdict is Verdict.REQUIRE_CONFIRMATION:
+            turn.queue.insert(0, _pending(PendingKind.CONFIRM_VALUE, fld, outcome, source))
+            turn.event("field_proposed", fld.id, source=source.value, reason=decision.reason)
+        else:
+            turn.event("proposal_dropped", fld.id, reason=decision.reason)
     elif isinstance(outcome, Confirm):
         turn.queue.insert(0, _pending(PendingKind.CONFIRM_VALUE, fld, outcome.value, source))
         turn.event("field_proposed", fld.id, source=source.value, reason="one_reading")
@@ -562,7 +592,7 @@ def _apply_extra(turn: _Turn, p: FieldProposal, kind: ReplyKind) -> bool:
         return False
     if any(item.field_id == fld.id for item in turn.queue):
         return False
-    reading = _interpret(fld, p, turn.config)
+    reading = _interpret(fld, p, turn.config, pending=False)
     if reading is None:
         turn.event("proposal_dropped", fld.id, reason="value_not_in_quote")
         return False
@@ -573,6 +603,12 @@ def _apply_extra(turn: _Turn, p: FieldProposal, kind: ReplyKind) -> bool:
     current = turn.answers.get(fld.id)
     if current is not None and current.answered:
         return _extra_for_answered(turn, fld, outcome, source, current, kind)
+    decision = policy.decide(
+        turn.start.state, turn.answers, policy.AcceptValue(fld.id, source, is_extra=True)
+    )
+    if decision.verdict is Verdict.DENY:
+        turn.event("proposal_dropped", fld.id, reason=decision.reason)
+        return False
     if isinstance(outcome, DateChoice):
         turn.queue.append(_date_choice(fld, outcome, source))
     else:
@@ -597,8 +633,15 @@ def _extra_for_answered(
     parsed = outcome.value if isinstance(outcome, Confirm) else outcome
     if not isinstance(parsed, Parsed) or parsed.value == current.value:
         return False
-    quoted = kind is ReplyKind.CORRECTION and source is Source.EXPLICIT
-    if quoted and isinstance(outcome, Parsed):  # Q7: explicit correction, quoted -> save + Undo
+    decision = policy.decide(
+        turn.start.state,
+        turn.answers,
+        policy.ChangeValue(fld.id, source, quoted_correction=kind is ReplyKind.CORRECTION),
+    )
+    if decision.verdict is Verdict.DENY:
+        turn.event("proposal_dropped", fld.id, reason=decision.reason)
+        return False
+    if decision.allowed and isinstance(outcome, Parsed):  # Q7: quoted correction, with Undo
         new = FieldState(
             status=FieldStatus.ACCEPTED,
             value=parsed.value,
@@ -675,7 +718,12 @@ def _needs_human(turn: _Turn, *, crisis: bool) -> Result:
         crisis_text = turn.config.crisis
         turn.notes.info += [crisis_text.heading, *crisis_text.lines]
         turn.event("distress_shown", level="crisis")
-    turn.notes.info.append(t.NEEDS_HUMAN)
+    reachable = any(answer_value(turn.answers, f) for f in ("phone", "email"))
+    people = turn.config.needs_human
+    turn.notes.info += people.with_contact if reachable else people.without_contact
+    if turn.config.synthetic:
+        turn.notes.info.append(t.DEMO_NO_CONTACT)
+    turn.notes.info += list(t.NEEDS_HUMAN if reachable else t.NEEDS_HUMAN_NO_CONTACT)
     turn.notes.actions.append("continue_alone")
     turn.event("needs_human", reason="crisis" if crisis else "requested")
     return turn.finish(Trigger.NEEDS_HUMAN, State.NEEDS_HUMAN)
@@ -731,7 +779,7 @@ def _mark_unknown(turn: _Turn, field_id: str) -> Result:
 def _submit(turn: _Turn) -> Result:
     if turn.start.state is not State.REVIEW:
         return _reject("not_allowed_in_state")
-    if not can_submit(turn.answers):
+    if not policy.decide(turn.start.state, turn.answers, policy.Submit()).allowed:
         turn.notes.info.append(t.REVIEW_CANNOT_SUBMIT)
         turn.event("submit_blocked", missing=missing_must_have(turn.answers))
         return turn.finish(Trigger.SUBMIT, State.REVIEW)
