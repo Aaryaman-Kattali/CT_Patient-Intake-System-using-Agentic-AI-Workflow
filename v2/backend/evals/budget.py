@@ -60,7 +60,8 @@ class Budget:
 
     def used_today(self) -> int:
         state = self._load()
-        return int(state.get("requests", 0)) if state.get("day") == self._today() else 0
+        requests = state.get("requests")
+        return requests if isinstance(requests, int) and state.get("day") == self._today() else 0
 
     def _load(self) -> dict[str, object]:
         try:

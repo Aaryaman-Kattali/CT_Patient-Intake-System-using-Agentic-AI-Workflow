@@ -15,8 +15,6 @@ import argparse
 import json
 import logging
 import random
-import re
-import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -34,23 +32,13 @@ from app.workflow.understanding import Understander
 from app.workflow.view import TurnView
 from evals.budget import Budget, DailyLimitReached, Limits
 from evals.cases import Case, Special, load_cases
+from evals.common import norm, say
 
 log = logging.getLogger("evals.runner")
 RUNS = Path.home() / ".intake-v2" / "evals"
 API_FAILURES = ("llm_timeout", "llm_error", "llm_no_key")  # not the model's fault
 MAX_STEPS = 120
 BACKOFF_S = (5.0, 15.0, 45.0)
-
-
-def say(*parts: object) -> None:
-    """Progress for the person running the eval (a CLI, so stdout, not the log)."""
-    sys.stdout.write(" ".join(str(p) for p in parts) + "\n")
-    sys.stdout.flush()
-
-
-def norm(value: str | None) -> str:
-    """Exact match after normalization: case, spaces and punctuation do not count."""
-    return re.sub(r"\s+", " ", re.sub(r"[^\w@.+ ]", " ", (value or "").casefold())).strip()
 
 
 def texts_of(view: TurnView) -> list[str]:
@@ -184,7 +172,7 @@ class CaseRun:
             pick = next((o for o in options if norm(o) == want), options[0])
             self.confirmations.append({"field": field, "kind": kind, "answer": pick})
             return self._send(c.Choose(option_id=pick), "button", field)
-        choice = self.case.conflict_choice.get(field)
+        choice: str | None = self.case.conflict_choice.get(field)
         if choice is None:
             current = snap.answers.get(field)
             choice = (
@@ -411,7 +399,9 @@ def main() -> None:
         settings = Settings()
         understander = build_understander(settings)
         limits = Limits()
-    budget = Budget(RUNS / args.run / "budget.json", limits)
+    # Live runs (V2 and the V1 baseline) share one daily count: they use the same key.
+    quota = RUNS / args.run / "budget.json" if args.dry_run else RUNS / "quota.json"
+    budget = Budget(quota, limits)
     path = run(args.run, understander, settings, budget, set(args.only or ()), args.limit)
     say(f"Results: {path}")
 

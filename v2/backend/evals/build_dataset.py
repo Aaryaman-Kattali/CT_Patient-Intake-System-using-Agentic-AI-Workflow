@@ -144,7 +144,16 @@ class Builder:
             "staff": f"Patient name: {p.full}",
         }[self.style]
 
-    def date_text(self, d: date) -> str:
+    def date_text(self, d: date, about: str = "birth") -> str:
+        """Phrased for the date being asked. (Run 1 bug, fixed: every persona phrased the
+        referral date as a birth date, e.g. staff typed "DOB 2026-05-22".)"""
+        if about == "referral":
+            return {
+                "typos": f"{plain_date(d)} is the referal date",
+                "esl": f"Referred on {intl_date(d)}.",
+                "context": f"{long_date(d)}, that is when it was sent",
+                "staff": f"Referred on {d.isoformat()}",
+            }.get(self.style, long_date(d))
         return {
             "literal": long_date(d),
             "short": plain_date(d),
@@ -200,7 +209,9 @@ class Builder:
             )
             self.pressed("referral_type", self.rng.choice(["physician", "specialist"]))
             ref = date(2026, self.rng.randrange(1, 9), self.rng.randrange(13, 29))
-            self.said("referral_date", self.date_text(ref), ref.isoformat(), long_date(ref))
+            self.said(
+                "referral_date", self.date_text(ref, "referral"), ref.isoformat(), long_date(ref)
+            )
             self.said("email", self.email_text(pt), pt.email)
             self.skipped("address")
             self.pressed("referral_mode", self.rng.choice(["fax", "web_form"]))

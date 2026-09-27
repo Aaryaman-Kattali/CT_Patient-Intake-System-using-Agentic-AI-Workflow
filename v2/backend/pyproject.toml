@@ -50,7 +50,7 @@ ignore = []
 python_version = "3.12"
 strict = true
 plugins = ["pydantic.mypy"]
-files = ["app", "tests", "scripts"]
+files = ["app", "tests", "scripts", "evals"]
 
 [[tool.mypy.overrides]]
 module = ["textstat"]  # dev-only wording checks; ships no type stubs
