@@ -417,3 +417,17 @@ def test_paused_only_accepts_resume(tmp_path: Path) -> None:
     for command in (c.Choose(option_id="family_inquiry"), c.Skip(), c.Submit(), c.Text(text="hi")):
         d.send(command, expect="rejected")
     assert d.send(c.Resume()).state is State.CHOOSE_INTAKE_TYPE
+
+
+def test_edit_intake_type_from_review_returns_to_review(tmp_path: Path) -> None:
+    """Found by the Phase 7 frontend: this raised IllegalTransition (a 500 in the API)."""
+    d = Driver(make_service(tmp_path / "intake.db"))
+    d.run(FI_SELF_BOOK)
+    d.send(c.EditField(field_id="intake_type"))
+    view = d.choose("family_inquiry")  # the same answer again
+    assert view.state is State.REVIEW
+    d.send(c.EditField(field_id="intake_type"))
+    view = d.choose("provider_referral")  # a different path: back to review, new fields listed
+    assert view.state is State.REVIEW
+    assert view.review is not None
+    assert "referral_provider_name" in [m.field_id for m in view.review.missing]

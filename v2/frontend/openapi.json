@@ -1,0 +1,2238 @@
+{
+  "components": {
+    "schemas": {
+      "ActionView": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "label"
+        ],
+        "title": "ActionView",
+        "type": "object"
+      },
+      "BenefitLine": {
+        "properties": {
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "value": {
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "value"
+        ],
+        "title": "BenefitLine",
+        "type": "object"
+      },
+      "BenefitSummary": {
+        "properties": {
+          "label_bottom": {
+            "default": "SYNTHETIC DEMO. These numbers are made up. They are not linked to any insurance plan.",
+            "title": "Label Bottom",
+            "type": "string"
+          },
+          "label_top": {
+            "default": "SYNTHETIC DEMO. These numbers are made up. They are not linked to any insurance plan.",
+            "title": "Label Top",
+            "type": "string"
+          },
+          "lines": {
+            "items": {
+              "$ref": "#/components/schemas/BenefitLine"
+            },
+            "title": "Lines",
+            "type": "array"
+          },
+          "member_name": {
+            "title": "Member Name",
+            "type": "string"
+          },
+          "source": {
+            "default": "field:full_name",
+            "title": "Source",
+            "type": "string"
+          },
+          "title": {
+            "default": "Benefit summary (demo)",
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "member_name",
+          "lines"
+        ],
+        "title": "BenefitSummary",
+        "type": "object"
+      },
+      "Choose": {
+        "description": "A button: an option id, \"yes\"/\"no\", \"old\"/\"new\"/\"neither\", or an ISO date choice.",
+        "properties": {
+          "extra_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Extra Text"
+          },
+          "kind": {
+            "const": "choose",
+            "default": "choose",
+            "title": "Kind",
+            "type": "string"
+          },
+          "option_id": {
+            "title": "Option Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "option_id"
+        ],
+        "title": "Choose",
+        "type": "object"
+      },
+      "EditRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "field_id": {
+            "maxLength": 64,
+            "title": "Field Id",
+            "type": "string"
+          },
+          "turn": {
+            "description": "The turn number the client last saw.",
+            "minimum": 0.0,
+            "title": "Turn",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "turn",
+          "field_id"
+        ],
+        "title": "EditRequest",
+        "type": "object"
+      },
+      "EmailRequest": {
+        "additionalProperties": false,
+        "description": "Empty on purpose: there is no recipient. It comes from the stored email field.",
+        "properties": {},
+        "title": "EmailRequest",
+        "type": "object"
+      },
+      "ErrorBody": {
+        "description": "Every error: a fixed code and a fixed message. Never exception text or field values.",
+        "properties": {
+          "actions": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/ActionView"
+            },
+            "title": "Actions",
+            "type": "array"
+          },
+          "code": {
+            "enum": [
+              "invalid_request",
+              "intake_not_found",
+              "not_found",
+              "method_not_allowed",
+              "stale_turn",
+              "action_not_available",
+              "form_incomplete",
+              "idempotency_key_required",
+              "email_not_submitted",
+              "email_no_address",
+              "email_not_synthetic",
+              "email_failed",
+              "not_submitted",
+              "resume_failed",
+              "too_many_attempts",
+              "internal_error"
+            ],
+            "title": "Code",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "view": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TurnView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "title": "ErrorBody",
+        "type": "object"
+      },
+      "HelpView": {
+        "description": "Fixed text for \"Talk to a person\" when no form is open (e.g. locked out).",
+        "properties": {
+          "info": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Info",
+            "type": "array"
+          }
+        },
+        "required": [
+          "info"
+        ],
+        "title": "HelpView",
+        "type": "object"
+      },
+      "InputType": {
+        "enum": [
+          "text",
+          "date",
+          "choice",
+          "phone",
+          "email"
+        ],
+        "title": "InputType",
+        "type": "string"
+      },
+      "KeepGoing": {
+        "properties": {
+          "kind": {
+            "const": "keep_going",
+            "default": "keep_going",
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "title": "KeepGoing",
+        "type": "object"
+      },
+      "MarkUnknown": {
+        "properties": {
+          "field_id": {
+            "title": "Field Id",
+            "type": "string"
+          },
+          "kind": {
+            "const": "mark_unknown",
+            "default": "mark_unknown",
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "field_id"
+        ],
+        "title": "MarkUnknown",
+        "type": "object"
+      },
+      "OptionView": {
+        "properties": {
+          "free_text": {
+            "default": false,
+            "title": "Free Text",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "label"
+        ],
+        "title": "OptionView",
+        "type": "object"
+      },
+      "ProgressView": {
+        "properties": {
+          "about_total": {
+            "title": "About Total",
+            "type": "integer"
+          },
+          "answered": {
+            "title": "Answered",
+            "type": "integer"
+          },
+          "exact": {
+            "title": "Exact",
+            "type": "boolean"
+          },
+          "sections": {
+            "items": {
+              "$ref": "#/components/schemas/SectionView"
+            },
+            "title": "Sections",
+            "type": "array"
+          }
+        },
+        "required": [
+          "answered",
+          "about_total",
+          "exact",
+          "sections"
+        ],
+        "title": "ProgressView",
+        "type": "object"
+      },
+      "QuestionView": {
+        "properties": {
+          "can_defer": {
+            "title": "Can Defer",
+            "type": "boolean"
+          },
+          "can_skip": {
+            "title": "Can Skip",
+            "type": "boolean"
+          },
+          "example": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Example"
+          },
+          "field_id": {
+            "title": "Field Id",
+            "type": "string"
+          },
+          "input_type": {
+            "$ref": "#/components/schemas/InputType"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "options": {
+            "items": {
+              "$ref": "#/components/schemas/OptionView"
+            },
+            "title": "Options",
+            "type": "array"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "why": {
+            "title": "Why",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "field_id",
+          "text",
+          "example",
+          "input_type",
+          "options",
+          "why",
+          "can_skip",
+          "can_defer"
+        ],
+        "title": "QuestionView",
+        "type": "object"
+      },
+      "ReplyRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "command": {
+            "discriminator": {
+              "mapping": {
+                "choose": "#/components/schemas/Choose",
+                "keep_going": "#/components/schemas/KeepGoing",
+                "mark_unknown": "#/components/schemas/MarkUnknown",
+                "skip": "#/components/schemas/Skip",
+                "talk_to_person": "#/components/schemas/TalkToPerson",
+                "text": "#/components/schemas/Text",
+                "undo": "#/components/schemas/Undo"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Choose"
+              },
+              {
+                "$ref": "#/components/schemas/Text"
+              },
+              {
+                "$ref": "#/components/schemas/Skip"
+              },
+              {
+                "$ref": "#/components/schemas/Undo"
+              },
+              {
+                "$ref": "#/components/schemas/KeepGoing"
+              },
+              {
+                "$ref": "#/components/schemas/TalkToPerson"
+              },
+              {
+                "$ref": "#/components/schemas/MarkUnknown"
+              }
+            ],
+            "title": "Command"
+          },
+          "turn": {
+            "description": "The turn number the client last saw.",
+            "minimum": 0.0,
+            "title": "Turn",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "turn",
+          "command"
+        ],
+        "title": "ReplyRequest",
+        "type": "object"
+      },
+      "ResumeCodeRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "resume_code": {
+            "maxLength": 32,
+            "title": "Resume Code",
+            "type": "string"
+          }
+        },
+        "required": [
+          "resume_code"
+        ],
+        "title": "ResumeCodeRequest",
+        "type": "object"
+      },
+      "ResumeCodeView": {
+        "description": "The resume code, on request from the \"Take a break\" area.",
+        "properties": {
+          "info": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Info",
+            "type": "array"
+          },
+          "resume_code": {
+            "title": "Resume Code",
+            "type": "string"
+          }
+        },
+        "required": [
+          "resume_code",
+          "info"
+        ],
+        "title": "ResumeCodeView",
+        "type": "object"
+      },
+      "ReviewMissing": {
+        "properties": {
+          "actions": {
+            "items": {
+              "$ref": "#/components/schemas/ActionView"
+            },
+            "title": "Actions",
+            "type": "array"
+          },
+          "field_id": {
+            "title": "Field Id",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "field_id",
+          "label",
+          "state",
+          "reason",
+          "actions"
+        ],
+        "title": "ReviewMissing",
+        "type": "object"
+      },
+      "ReviewRow": {
+        "properties": {
+          "display": {
+            "title": "Display",
+            "type": "string"
+          },
+          "field_id": {
+            "title": "Field Id",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "section": {
+            "title": "Section",
+            "type": "string"
+          }
+        },
+        "required": [
+          "field_id",
+          "section",
+          "label",
+          "display"
+        ],
+        "title": "ReviewRow",
+        "type": "object"
+      },
+      "ReviewView": {
+        "properties": {
+          "answered": {
+            "items": {
+              "$ref": "#/components/schemas/ReviewRow"
+            },
+            "title": "Answered",
+            "type": "array"
+          },
+          "can_submit": {
+            "title": "Can Submit",
+            "type": "boolean"
+          },
+          "missing": {
+            "items": {
+              "$ref": "#/components/schemas/ReviewMissing"
+            },
+            "title": "Missing",
+            "type": "array"
+          }
+        },
+        "required": [
+          "answered",
+          "missing",
+          "can_submit"
+        ],
+        "title": "ReviewView",
+        "type": "object"
+      },
+      "SectionView": {
+        "properties": {
+          "done": {
+            "title": "Done",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "done"
+        ],
+        "title": "SectionView",
+        "type": "object"
+      },
+      "SessionView": {
+        "description": "A new intake, or one opened on a new device with a resume code.",
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "token": {
+            "title": "Token",
+            "type": "string"
+          },
+          "view": {
+            "$ref": "#/components/schemas/TurnView"
+          }
+        },
+        "required": [
+          "id",
+          "token",
+          "view"
+        ],
+        "title": "SessionView",
+        "type": "object"
+      },
+      "Skip": {
+        "description": "\"Skip\" on optional fields, \"Answer later\" on needed ones.",
+        "properties": {
+          "kind": {
+            "const": "skip",
+            "default": "skip",
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "title": "Skip",
+        "type": "object"
+      },
+      "StaffSummary": {
+        "properties": {
+          "disclaimer": {
+            "default": "Draft for staff review. Built from the form answers only. Not a clinical document.",
+            "title": "Disclaimer",
+            "type": "string"
+          },
+          "not_answered": {
+            "items": {
+              "$ref": "#/components/schemas/Statement"
+            },
+            "title": "Not Answered",
+            "type": "array"
+          },
+          "notes": {
+            "items": {
+              "$ref": "#/components/schemas/Statement"
+            },
+            "title": "Notes",
+            "type": "array"
+          },
+          "sections": {
+            "additionalProperties": {
+              "items": {
+                "$ref": "#/components/schemas/Statement"
+              },
+              "type": "array"
+            },
+            "title": "Sections",
+            "type": "object"
+          },
+          "title": {
+            "const": "Intake summary for staff",
+            "default": "Intake summary for staff",
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sections",
+          "not_answered",
+          "notes"
+        ],
+        "title": "StaffSummary",
+        "type": "object"
+      },
+      "State": {
+        "enum": [
+          "greeting",
+          "choose_intake_type",
+          "collecting",
+          "confirming_extra",
+          "resolving_conflict",
+          "review",
+          "submitted",
+          "paused",
+          "needs_human"
+        ],
+        "title": "State",
+        "type": "string"
+      },
+      "Statement": {
+        "properties": {
+          "sources": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Sources",
+            "type": "array"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text",
+          "sources"
+        ],
+        "title": "Statement",
+        "type": "object"
+      },
+      "TalkToPerson": {
+        "properties": {
+          "kind": {
+            "const": "talk_to_person",
+            "default": "talk_to_person",
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "title": "TalkToPerson",
+        "type": "object"
+      },
+      "Text": {
+        "properties": {
+          "kind": {
+            "const": "text",
+            "default": "text",
+            "title": "Kind",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "Text",
+        "type": "object"
+      },
+      "TurnRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "turn": {
+            "description": "The turn number the client last saw.",
+            "minimum": 0.0,
+            "title": "Turn",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "turn"
+        ],
+        "title": "TurnRequest",
+        "type": "object"
+      },
+      "TurnView": {
+        "properties": {
+          "acknowledgement": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Acknowledgement"
+          },
+          "actions": {
+            "items": {
+              "$ref": "#/components/schemas/ActionView"
+            },
+            "title": "Actions",
+            "type": "array"
+          },
+          "info": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Info",
+            "type": "array"
+          },
+          "progress": {
+            "$ref": "#/components/schemas/ProgressView"
+          },
+          "question": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/QuestionView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "resume_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resume Code"
+          },
+          "review": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReviewView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "state": {
+            "$ref": "#/components/schemas/State"
+          },
+          "turn": {
+            "title": "Turn",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "state",
+          "turn",
+          "acknowledgement",
+          "info",
+          "question",
+          "actions",
+          "progress",
+          "review"
+        ],
+        "title": "TurnView",
+        "type": "object"
+      },
+      "UiText": {
+        "description": "Every fixed word the frontend shows besides questions and answers (principle P3).",
+        "properties": {
+          "buttons": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Buttons",
+            "type": "object"
+          },
+          "labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Labels",
+            "type": "object"
+          },
+          "sentences": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Sentences",
+            "type": "object"
+          }
+        },
+        "required": [
+          "buttons",
+          "labels",
+          "sentences"
+        ],
+        "title": "UiText",
+        "type": "object"
+      },
+      "Undo": {
+        "properties": {
+          "kind": {
+            "const": "undo",
+            "default": "undo",
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "title": "Undo",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "Intake assistant (demo, synthetic data only)",
+    "version": "0.1.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/health": {
+      "get": {
+        "operationId": "health_health_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "boolean"
+                      }
+                    ]
+                  },
+                  "title": "Response Health Health Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Health"
+      }
+    },
+    "/help/person": {
+      "get": {
+        "description": "What to do to talk to a person when no form is open (e.g. after a lockout).",
+        "operationId": "person_help_help_person_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HelpView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "summary": "Person Help"
+      }
+    },
+    "/intakes": {
+      "post": {
+        "operationId": "create_intake_intakes_post",
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "summary": "Create Intake"
+      }
+    },
+    "/intakes/resume": {
+      "post": {
+        "description": "Open an intake on a new device. Failures get one fixed answer, whether or not the\ncode exists, and are rate-limited per code and per client.",
+        "operationId": "resume_with_code_intakes_resume_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResumeCodeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "summary": "Resume With Code"
+      }
+    },
+    "/intakes/{intake_id}": {
+      "get": {
+        "operationId": "get_intake_intakes__intake_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "intake_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Intake Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-intake-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Intake-Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TurnView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "summary": "Get Intake"
+      }
+    },
+    "/intakes/{intake_id}/benefit-summary": {
+      "post": {
+        "operationId": "benefit_summary_intakes__intake_id__benefit_summary_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "intake_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Intake Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-intake-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Intake-Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BenefitSummary"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "summary": "Benefit Summary"
+      }
+    },
+    "/intakes/{intake_id}/email": {
+      "post": {
+        "description": "No recipient anywhere in this request: it is read from the stored email field.",
+        "operationId": "send_email_intakes__intake_id__email_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "intake_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Intake Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "idempotency-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-intake-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Intake-Token"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/EmailRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TurnView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Bad Gateway"
+          }
+        },
+        "summary": "Send Email"
+      }
+    },
+    "/intakes/{intake_id}/pause": {
+      "post": {
+        "operationId": "pause_intakes__intake_id__pause_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "intake_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Intake Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-intake-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Intake-Token"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TurnRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TurnView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "summary": "Pause"
+      }
+    },
+    "/intakes/{intake_id}/replies": {
+      "post": {
+        "operationId": "reply_intakes__intake_id__replies_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "intake_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Intake Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-intake-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Intake-Token"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReplyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TurnView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "summary": "Reply"
+      }
+    },
+    "/intakes/{intake_id}/resume": {
+      "post": {
+        "description": "PAUSED -> where the user was. NEEDS_HUMAN -> \"Continue on my own\".",
+        "operationId": "resume_intakes__intake_id__resume_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "intake_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Intake Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-intake-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Intake-Token"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TurnRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TurnView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "summary": "Resume"
+      }
+    },
+    "/intakes/{intake_id}/resume-code": {
+      "post": {
+        "description": "The resume code on request, any time after starting (\"Take a break\" area).",
+        "operationId": "resume_code_intakes__intake_id__resume_code_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "intake_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Intake Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-intake-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Intake-Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResumeCodeView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "summary": "Resume Code"
+      }
+    },
+    "/intakes/{intake_id}/review": {
+      "get": {
+        "operationId": "review_intakes__intake_id__review_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "intake_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Intake Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-intake-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Intake-Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TurnView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "summary": "Review"
+      }
+    },
+    "/intakes/{intake_id}/review/edit": {
+      "post": {
+        "operationId": "review_edit_intakes__intake_id__review_edit_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "intake_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Intake Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-intake-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Intake-Token"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EditRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TurnView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "summary": "Review Edit"
+      }
+    },
+    "/intakes/{intake_id}/staff-summary": {
+      "post": {
+        "operationId": "staff_summary_intakes__intake_id__staff_summary_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "intake_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Intake Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-intake-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Intake-Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StaffSummary"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "summary": "Staff Summary"
+      }
+    },
+    "/intakes/{intake_id}/start": {
+      "post": {
+        "operationId": "start_intakes__intake_id__start_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "intake_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Intake Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-intake-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Intake-Token"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TurnRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TurnView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "summary": "Start"
+      }
+    },
+    "/intakes/{intake_id}/submit": {
+      "post": {
+        "operationId": "submit_intakes__intake_id__submit_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "intake_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Intake Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-intake-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Intake-Token"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TurnRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TurnView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "summary": "Submit"
+      }
+    },
+    "/ui/text": {
+      "get": {
+        "description": "Fixed interface wording, so the frontend writes none of its own.",
+        "operationId": "ui_text_ui_text_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UiText"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "summary": "Ui Text"
+      }
+    }
+  }
+}

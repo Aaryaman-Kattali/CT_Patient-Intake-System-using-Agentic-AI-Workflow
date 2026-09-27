@@ -32,7 +32,7 @@ TABLE: MappingProxyType[tuple[State, Trigger], frozenset[State]] = MappingProxyT
     {
         (S.GREETING, Trigger.START): frozenset({S.CHOOSE_INTAKE_TYPE}),
         (S.CHOOSE_INTAKE_TYPE, Trigger.ANSWER): frozenset(
-            {S.CHOOSE_INTAKE_TYPE, S.COLLECTING, S.CONFIRMING_EXTRA}
+            {S.CHOOSE_INTAKE_TYPE, S.COLLECTING, S.CONFIRMING_EXTRA, S.REVIEW}  # REVIEW: an edit
         ),
         (S.COLLECTING, Trigger.ANSWER): frozenset(
             {S.COLLECTING, S.CONFIRMING_EXTRA, S.RESOLVING_CONFLICT, S.REVIEW}

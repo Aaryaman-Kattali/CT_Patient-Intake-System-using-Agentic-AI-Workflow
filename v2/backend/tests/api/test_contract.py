@@ -77,6 +77,7 @@ def _touch_every_endpoint(api: Api) -> None:
     client.post("/intakes/resume", json={"nope": 1})
     client.get("/intakes/00000000-0000-4000-8000-000000000000")
     client.get("/help/person")
+    client.get("/ui/text")
     client.get("/no-such-page")
 
 
@@ -127,7 +128,7 @@ def test_every_endpoint_was_exercised(recorded: tuple[FastAPI, list[Recorded]]) 
     endpoints = {
         (r.path, m) for r in api_routes(app.routes) if r.path != "/health" for m in r.methods or ()
     }
-    assert len(endpoints) == 15
+    assert len(endpoints) == 16
     assert endpoints - hit == set()
 
 

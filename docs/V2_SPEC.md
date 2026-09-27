@@ -118,6 +118,17 @@ Particular attention to:
 
 ---
 
+### 3.7 Frontend (Phase 7)
+
+- React + TypeScript + Vite in `v2/frontend`. API types are generated from `/openapi.json` (`npm run gen:api`); CI fails if they are out of date. No API type is hand-written.
+- **No wording in the frontend.** Labels and interface sentences come from `GET /ui/text` (checked by the backend wording tests), questions from each turn. The only exception is one offline message, identical to the backend's, for when the API cannot be reached at all.
+- One question per screen, as the page's only `h1`. On each new turn, focus moves to it and the acknowledgement, question and any text are announced in a polite live region. A refused turn (same turn number) keeps focus where it was and announces why.
+- "Reading your answer…" appears in a status region only after 1 s of waiting. There is no motion at all (no spinners, typing dots, transitions or animations), whatever `prefers-reduced-motion` says.
+- Fixed places: "Why are you asking this?" directly under the question; a bar under every question screen with "Skip"/"Answer later" on the left and "Take a break" and "Show my code" (the code on request) on the right. "I'm not sure" is always the last option button.
+- Nothing changes on screen until the user acts. A double click sends one request.
+- The intake token is kept in `localStorage`, so closing the tab and coming back resumes on the same device. Text size (five steps) is remembered on the device. Targets are at least 48 px; one column on phones.
+- Tests: component tests (Vitest, Testing Library) and Playwright end-to-end tests against the real backend with a rule-based fake understander (`tests/e2e_server.py`, no Gemini). axe (WCAG 2.2 A/AA) runs on every screen type, and a keyboard-only walkthrough completes a full Family Inquiry.
+
 ## 4. Architecture
 
 ### 4.1 Overview
@@ -482,6 +493,7 @@ Compare this single understanding agent against an ADK multi-agent variant (for 
 | GREETING | `start` | – | CHOOSE_INTAKE_TYPE |
 | CHOOSE_INTAKE_TYPE | `field_accepted(intake_type)` | queue empty | COLLECTING |
 | CHOOSE_INTAKE_TYPE | `field_accepted(intake_type)` | queue non-empty | CONFIRMING_EXTRA |
+| CHOOSE_INTAKE_TYPE | `field_accepted(intake_type)` | queue empty ∧ `return_to_review` (an edit from review) | REVIEW |
 | COLLECTING | `field_accepted` / `field_skipped` / `field_deferred` | queue empty, fields remain | COLLECTING |
 | COLLECTING | `extras_queued` | – | CONFIRMING_EXTRA |
 | COLLECTING | `conflict_detected` | – | RESOLVING_CONFLICT |
@@ -563,6 +575,7 @@ Every state-changing request carries the `turn` the client last saw (§8). Reque
 | `POST /intakes/{id}/resume` | PAUSED → where they were; NEEDS_HUMAN → "Continue on my own" | `Turn` | 404, 409 |
 | `POST /intakes/resume` | `{resume_code}` from a new device (no token) | `SessionView` with a **new** token | 400 `resume_failed`, 429 `too_many_attempts` (with a "Talk to a person" action) |
 | `POST /intakes/{id}/resume-code` | The resume code on request ("Take a break" area), any time after starting | `ResumeCodeView {resume_code, info}` | 404, 409 before starting |
+| `GET /ui/text` | Every fixed word the frontend shows besides questions and answers (button labels, interface labels, sentences such as "Reading your answer…") | `UiText {buttons, labels, sentences}` | – |
 | `GET /help/person` | "Talk to a person" text when no form is open (e.g. locked out) | `HelpView {info}` | – |
 | `GET /intakes/{id}/review` | All answers (with their section) plus what is missing, in any state | `Turn` with `review` | 404 |
 | `POST /intakes/{id}/review/edit` | `{turn, field_id}` → pins that question | `Turn` | 404, 409 |

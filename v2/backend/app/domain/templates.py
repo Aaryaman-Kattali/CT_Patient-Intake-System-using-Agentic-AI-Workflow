@@ -132,3 +132,45 @@ BUTTONS: MappingProxyType[str, str] = MappingProxyType(
         "submit": "Send my form",
     }
 )
+
+
+# --- Text the frontend shows around the questions (served by GET /ui/text). The frontend
+# writes no wording of its own: every word a user sees comes from this module or the registry.
+UI_LABELS: MappingProxyType[str, str] = MappingProxyType(
+    {
+        "send": "Send",
+        "answer_box": "Your answer",
+        "text_size": "Text size",
+        "text_bigger": "Bigger text",
+        "text_smaller": "Smaller text",
+        "your_code": "Your code",
+        "copy_code": "Copy code",
+        "show_code": "Show my code",
+        "have_code": "I have a code",
+        "enter_code": "Type your code",
+        "review_title": "Check your answers",
+        "your_answers": "Your answers",
+        "change": "Change",
+        "email_me": "Email me a confirmation",
+        "staff_title": "For staff (demo)",
+        "staff_summary": "Show the staff summary",
+        "benefit_summary": "Show the benefit demo",
+        "new_form": "Start a new form",
+        "back": "Back",
+        "progress": "Your progress",
+        "done": "Done",
+        "still_needed": REVIEW_STILL_NEEDED,
+    }
+)
+UI_SENTENCES: MappingProxyType[str, str] = MappingProxyType(
+    {
+        "reading": "Reading your answer…",
+        "example": "Example: {example}",
+        "progress": "Question {number} of about {total}",
+        "code_copied": "The code is copied.",
+        "no_connection": "The form cannot be reached right now. Please try again in a moment.",
+        "resume_intro": "Type the code you wrote down. Then you can go on with your form.",
+    }
+)
+# After the form is sent (the engine adds no text of its own on submit).
+SUBMITTED = ("Thank you. We have your form.", "You can close this page now.")

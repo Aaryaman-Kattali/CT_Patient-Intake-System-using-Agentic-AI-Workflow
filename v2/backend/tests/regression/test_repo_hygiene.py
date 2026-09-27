@@ -142,6 +142,11 @@ def test_ci_workflow_runs_tests_and_linters() -> None:
         "ruff format --check",
         "mypy",
         "pytest",
+        "npm ci",
+        "npm run check:api",  # generated API types must match the backend
+        "npm run typecheck",
+        "npm test",
+        "npx playwright test",
     ):
         assert step in ci, f"CI is missing: {step}"
     assert "-m live" not in ci

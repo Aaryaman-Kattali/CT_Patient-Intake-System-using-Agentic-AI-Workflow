@@ -36,6 +36,7 @@ SAMPLE = {
     "total": "12",
     "code": "ABCD 1234",
     "name": "Alex",
+    "number": "4",
 }
 
 METHOD_OPTIONS = get_field("preferred_contact_method").options
@@ -79,6 +80,8 @@ SENTENCES = [
     *load_region_content("US").needs_human.without_contact,
     t.DEMO_NO_CONTACT,
     *t.RESUME_CODE_INFO,
+    *t.UI_SENTENCES.values(),
+    *t.SUBMITTED,
     *load_region_content("US").needs_human.no_form,
 ]
 
@@ -91,6 +94,7 @@ COMPOSED_QUESTIONS = [
 LABELS = [
     *(o.label for f in FIELDS for o in f.options),
     *t.BUTTONS.values(),
+    *t.UI_LABELS.values(),
     t.REVIEW_STILL_NEEDED,
     t.REVIEW_NOT_KNOWN,
 ]

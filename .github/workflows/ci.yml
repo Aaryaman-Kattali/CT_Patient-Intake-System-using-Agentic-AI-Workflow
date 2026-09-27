@@ -29,3 +29,41 @@ jobs:
         run: uv run mypy
       - name: Tests (live LLM tests are deselected by default)
         run: uv run pytest
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: v2/frontend
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: true
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: v2/frontend/package-lock.json
+      - name: Install backend (for the OpenAPI schema and the e2e server)
+        working-directory: v2/backend
+        run: uv sync --locked
+      - name: Install (locked)
+        run: npm ci
+      - name: Generated API types are up to date
+        run: npm run check:api
+      - name: Type check
+        run: npm run typecheck
+      - name: Component tests
+        run: npm test
+      - name: Browser for end-to-end tests
+        run: npx playwright install --with-deps chromium
+      - name: End-to-end tests (real backend, fake understander, axe on every screen)
+        run: npx playwright test
+      - name: Keep screenshots
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: screenshots
+          path: v2/frontend/screenshots/
+          if-no-files-found: ignore

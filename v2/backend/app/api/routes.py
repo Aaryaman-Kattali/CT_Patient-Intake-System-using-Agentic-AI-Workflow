@@ -21,6 +21,7 @@ from app.api.schemas import (
     ResumeCodeView,
     SessionView,
     TurnRequest,
+    UiText,
 )
 from app.domain import templates as t
 from app.services.benefit_summary import BenefitSummary
@@ -120,6 +121,12 @@ def person_help(svc: ServicesDep) -> HelpView:
     return HelpView(info=svc.person_help)
 
 
+@router.get("/ui/text", response_model=UiText, responses=_errors())
+def ui_text() -> UiText:
+    """Fixed interface wording, so the frontend writes none of its own."""
+    return UiText(buttons=dict(t.BUTTONS), labels=dict(t.UI_LABELS), sentences=dict(t.UI_SENTENCES))
+
+
 # --- turns --------------------------------------------------------------------------------
 
 
@@ -194,7 +201,7 @@ def send_email(
         status, code = _EMAIL_ERRORS[result.status]
         raise ApiError(status, code)
     snap_view = _found(svc.intakes.view(intake_id))
-    return snap_view.model_copy(update={"info": (t.EMAIL_SENT,)})
+    return snap_view.model_copy(update={"info": (*snap_view.info, t.EMAIL_SENT)})
 
 
 @router.post(

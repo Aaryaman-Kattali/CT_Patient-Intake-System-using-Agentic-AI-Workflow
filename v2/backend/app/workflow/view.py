@@ -231,6 +231,8 @@ def render(
     info = list(notes.info)
     if snap.state is State.GREETING and not info:
         info = [line.format(total=ABOUT_TOTAL) for line in t.START]
+    if snap.state is State.SUBMITTED:
+        info = [*t.SUBMITTED, *info]
     return TurnView(
         state=snap.state,
         turn=snap.turn,

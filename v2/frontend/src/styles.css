@@ -1,0 +1,377 @@
+/* Calm and predictable: soft colours, large text and targets, one column, no motion. */
+:root {
+  --bg: #f6f4ef;
+  --surface: #ffffff;
+  --text: #1f2a33;
+  --muted: #4a5561;
+  --accent: #2b5a84;
+  --accent-text: #ffffff;
+  --accent-soft: #e8eff6;
+  --line: #c9d1d9;
+  --notice-bg: #fdf6e7;
+  --notice-line: #a86b12;
+  --focus: #1d4ed8;
+  --radius: 0.5rem;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+  font-size: 100%; /* scaled by the text size buttons */
+  line-height: 1.6;
+  color: var(--text);
+  background: var(--bg);
+}
+
+/* Nothing on this page moves. Kept as a rule so no later style can add motion. */
+*,
+*::before,
+*::after {
+  animation: none !important;
+  transition: none !important;
+  scroll-behavior: auto !important;
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  font-size: 1.125rem;
+}
+
+.app {
+  max-width: 40rem;
+  margin: 0 auto;
+  padding: 1rem;
+}
+
+.top {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 0.5rem;
+}
+
+main {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 1.25rem;
+}
+
+h1 {
+  font-size: 1.6rem;
+  line-height: 1.3;
+  margin: 0.25rem 0 0.75rem;
+}
+
+h1:focus,
+h1:focus-visible {
+  outline: none; /* focus is moved here by the app so the question is read; it is not a control */
+}
+
+h2 {
+  font-size: 1.25rem;
+  margin: 1.5rem 0 0.5rem;
+}
+
+p {
+  margin: 0 0 0.75rem;
+}
+
+button {
+  font: inherit;
+  font-size: 1rem;
+  min-height: 3rem;
+  min-width: 3rem;
+  padding: 0.6rem 1.1rem;
+  border-radius: var(--radius);
+  border: 2px solid var(--accent);
+  background: var(--accent);
+  color: var(--accent-text);
+  cursor: pointer;
+  text-align: left;
+}
+
+button.secondary {
+  background: var(--surface);
+  color: var(--accent);
+}
+
+button.link {
+  background: none;
+  border: none;
+  color: var(--accent);
+  text-decoration: underline;
+  padding: 0.5rem 0;
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+button:focus-visible,
+input:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 3px;
+}
+
+input {
+  font: inherit;
+  width: 100%;
+  min-height: 3rem;
+  padding: 0.6rem 0.75rem;
+  border: 2px solid var(--muted);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+}
+
+label {
+  display: block;
+  font-weight: 600;
+  margin-bottom: 0.35rem;
+}
+
+.acknowledgement {
+  color: var(--muted);
+  margin-bottom: 0.25rem;
+}
+
+.why {
+  margin-bottom: 0.75rem;
+}
+
+.why-text,
+.info {
+  background: var(--accent-soft);
+  border-radius: var(--radius);
+  padding: 0.75rem 1rem;
+}
+
+.info p:last-child,
+.why-text {
+  margin-bottom: 0;
+}
+
+.info {
+  margin-bottom: 1rem;
+}
+
+.options {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin: 1rem 0;
+}
+
+.option {
+  width: 100%;
+  background: var(--surface);
+  color: var(--text);
+  border-color: var(--line);
+}
+
+.option:hover {
+  border-color: var(--accent);
+}
+
+.text-answer {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 1rem 0;
+}
+
+.text-answer button {
+  align-self: flex-start;
+}
+
+.example {
+  color: var(--muted);
+  margin: 0;
+}
+
+.actions,
+.row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin: 1rem 0;
+}
+
+.notice {
+  background: var(--notice-bg);
+  border-left: 4px solid var(--notice-line);
+  padding: 0.75rem 1rem;
+  border-radius: var(--radius);
+}
+
+.reading {
+  min-height: 1.6em; /* keeps the layout still when the status appears */
+  color: var(--muted);
+  margin: 0.5rem 0 0;
+}
+
+.progress {
+  margin-bottom: 0.5rem;
+  color: var(--muted);
+}
+
+.progress p {
+  margin: 0 0 0.25rem;
+  font-weight: 600;
+}
+
+.progress ol {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.progress li.done {
+  color: var(--text);
+}
+
+/* The fixed bar: the same buttons in the same places on every question screen. */
+.bar-area {
+  border-top: 1px solid var(--line);
+  margin-top: 1.5rem;
+  padding-top: 1rem;
+}
+
+.bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.bar-right {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.bar-placeholder {
+  display: inline-block;
+  min-width: 1px;
+}
+
+.code-box {
+  border: 2px dashed var(--accent);
+  border-radius: var(--radius);
+  padding: 1rem;
+  margin: 1rem 0;
+}
+
+.code-label {
+  margin: 0;
+  font-weight: 600;
+}
+
+.code {
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-size: 2rem;
+  letter-spacing: 0.15em;
+  margin: 0.25rem 0 0.75rem;
+}
+
+.copied {
+  margin: 0.5rem 0 0;
+}
+
+.review dl {
+  margin: 0;
+}
+
+.review-row {
+  display: grid;
+  grid-template-columns: 1fr 1.4fr auto;
+  gap: 0.5rem 1rem;
+  align-items: center;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.review-row dt {
+  font-weight: 600;
+}
+
+.review-row dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.missing {
+  padding-left: 1.25rem;
+}
+
+.reason {
+  color: var(--muted);
+}
+
+.text-size {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.staff {
+  border-top: 1px solid var(--line);
+  margin-top: 1.5rem;
+}
+
+.draft {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 1rem;
+  margin-top: 1rem;
+}
+
+.demo-label {
+  font-weight: 700;
+}
+
+.sources {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Phones: stack the review rows and let buttons fill the width. */
+@media (max-width: 30rem) {
+  .app {
+    padding: 0.5rem;
+  }
+  main {
+    padding: 1rem;
+  }
+  .review-row {
+    grid-template-columns: 1fr;
+  }
+  .bar,
+  .bar-right,
+  .actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .bar button,
+  .actions button {
+    width: 100%;
+  }
+  .bar-left:has(.bar-placeholder) {
+    display: none; /* no empty row on phones; the other buttons keep their order */
+  }
+}

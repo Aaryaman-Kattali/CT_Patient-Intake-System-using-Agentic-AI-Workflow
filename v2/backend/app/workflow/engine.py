@@ -723,7 +723,9 @@ def _needs_human(turn: _Turn, *, crisis: bool) -> Result:
     turn.notes.info += people.with_contact if reachable else people.without_contact
     if turn.config.synthetic:
         turn.notes.info.append(t.DEMO_NO_CONTACT)
-    turn.notes.info += list(t.NEEDS_HUMAN if reachable else t.NEEDS_HUMAN_NO_CONTACT)
+    tail = t.NEEDS_HUMAN if reachable else t.NEEDS_HUMAN_NO_CONTACT
+    shown = " ".join(turn.notes.info)
+    turn.notes.info += [line for line in tail if line not in shown]  # say each thing once
     turn.notes.actions.append("continue_alone")
     turn.event("needs_human", reason="crisis" if crisis else "requested")
     return turn.finish(Trigger.NEEDS_HUMAN, State.NEEDS_HUMAN)
