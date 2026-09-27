@@ -203,6 +203,10 @@ class IntakeService:
                 "model": reply.call.model,
                 "status": reply.call.status,
                 "latency_ms": reply.call.latency_ms,
+                "attempts": reply.call.attempts,
+                "hedged": reply.call.hedged,
+                "winner": reply.call.winner,
+                "error_class": reply.call.error_class,
                 "reply_kind": u.kind.value if u else None,
             },
         )

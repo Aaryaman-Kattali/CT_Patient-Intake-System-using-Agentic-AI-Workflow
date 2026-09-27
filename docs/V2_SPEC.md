@@ -174,13 +174,19 @@ A single turn goes like this:
 - The agent: `include_contents="none"` (no history), no tools, no sub-agents, transfers disallowed, no `output_key`, temperature 0. Each call uses a fresh ADK session that is deleted afterwards.
 - `InMemorySessionService.create_session` is `async` (with a separate `create_session_sync`). This confirms audit item A5: V1 calls it without `await`.
 - `google-genai` reads `GOOGLE_API_KEY` (then `GEMINI_API_KEY`) from the **process environment**. Our settings read `.env` into the `Settings` object only, so the key is passed to the client explicitly: `Gemini(model=GEMINI_MODEL, client_kwargs={"api_key": ...})`. Nothing is written to `os.environ`.
-- One retry on a parse error or timeout (`LLM_TIMEOUT_S` = 8, so the worst case is about 16 s); then the turn changes nothing and shows a fixed "typing is not working" message. The same happens when there is no API key or the API returns an error. There are two versions, chosen by the current question:
+- **Hedged request, one deadline per turn** (`app/agents/hedging.py`):
+  - Overall deadline `LLM_DEADLINE_S` = 12. Nothing runs past it.
+  - If there is no reply after `LLM_HEDGE_AFTER_S` = 3, one second identical request is started. The first valid result wins and the other request is cancelled. A cancelled request's result is never used, and its ADK session is still deleted.
+  - Unreadable output: one more attempt, if time remains within the deadline.
+  - API errors: retried only when transient (429 and 5xx), once, after about 1 s with jitter (1.0 to 1.5 s), and only if that fits within the deadline. Other 4xx errors and non-API errors are not retried: an identical request would fail the same way.
+  - `llm_calls` records `attempts` (requests started), `hedged`, `winner` (which request gave the result, 1 = the first) and `error_class` (e.g. `ClientError:429`) for failures.
+- If no valid result arrives by the deadline, or the call fails, the turn changes nothing and shows a fixed "typing is not working" message. The same happens when there is no API key. There are two versions, chosen by the current question:
   - Questions with buttons (choice fields, yes/no, date choice, conflict): "Typing is not working right now. You can use the buttons, or take a break and come back."
   - Typed questions (text, date, phone, email): "Typing is not working right now. Please try again in a moment, or take a break and come back."
 
   "I did not understand. Here is the question again." is only for when the model worked but found nothing usable.
-- The understander is built once and runs every call on one long-lived event loop in a background thread. A new event loop per call (`asyncio.run`) leaves the Gemini client's connections tied to a closed loop. The timeout wraps only the model call, not the in-memory session setup.
-- **Latency (Phase 5 live runs):** setup is not the bottleneck (imports about 1.9 s once per process, agent build about 0.05 s). Most calls take 1 to 3 s. The slow calls were the API itself: the same slowness happened with plain `google-genai` calls without ADK, including requests that hung for about 40 s and then returned a server error. The model reports no thinking tokens. The 8 s timeout with one retry is the defence.
+- The understander is built once and runs every call on one long-lived event loop in a background thread. A new event loop per call (`asyncio.run`) leaves the Gemini client's connections tied to a closed loop. The deadline is enforced inside that loop.
+- **Latency (Phase 5 live runs):** setup is not the bottleneck (imports about 1.9 s once per process, agent build about 0.05 s). Most calls take 1 to 3 s. The slow calls were the API itself: the same slowness happened with plain `google-genai` calls without ADK, including requests that hung for about 40 s and then returned a server error. The model reports no thinking tokens. A plain timeout with retry either waits too long or cuts off calls that would have finished at about 9 s, so a hedged request is the defence.
 - Offline tests plug a scripted `BaseLlm` into the real `LlmAgent` + `Runner`, so the ADK wiring is tested without a network or a key.
 
 **Original ADK note:** before writing agent code (Phase 4), I will read the installed ADK version's API. Specifically I will check how `LlmAgent(output_schema=...)` passes the schema to Gemini, the `Runner`/session API, and whether `create_session` is async. If ADK does not give reliable schema-constrained output, the understanding agent will call `google-genai` directly with `response_schema`, and ADK will stay only as the agent wrapper. I will report this, not decide it silently.
@@ -515,7 +521,7 @@ Every write for one turn happens in **one transaction**. So a saved answer and i
 | `field_values` | (`intake_id`, `field_id`) unique · `value` · `display_value` · `status` (accepted/confirmed/skipped/deferred/dont_know/unknown_confirmed) · `source` (explicit/inferred/button) · `attempts` · `updated_at` | Current value per field. |
 | `pending_items` | `id` · `intake_id` · `seq` · `kind` (extra/conflict/date_choice) · `field_id` · `payload` JSON | The FIFO queue behind CONFIRMING_EXTRA / RESOLVING_CONFLICT. |
 | `intake_events` | `id` · `intake_id` · `seq` (per intake, unique) · `type` · `field_id` · `payload` JSON · `created_at` | **Append-only.** Types: `created`, `question_shown`, `field_proposed`, `field_accepted`, `field_confirmed`, `field_rejected`, `field_corrected`, `conflict_detected`, `conflict_resolved`, `field_skipped`, `field_deferred`, `field_marked_unknown`, `conflict_unresolved`, `paused`, `resumed`, `distress_shown`, `needs_human`, `unsafe_blocked`, `submitted`, `email_sent`, `email_denied`, `staff_summary_generated`, `benefit_demo_generated`. |
-| `llm_calls` | `id` · `intake_id` · `agent` · `model` · `input_tokens` · `output_tokens` · `latency_ms` · `reply_kind` · `status` (ok/parse_error/timeout/error/no_key) · `attempts` · `created_at` | **No prompt or response text**, ever. |
+| `llm_calls` | `id` · `intake_id` · `agent` · `model` · `input_tokens` · `output_tokens` · `latency_ms` · `reply_kind` · `status` (ok/parse_error/timeout/error/no_key; timeout = deadline passed) · `attempts` · `hedged` · `winner` · `error_class` · `created_at` | **No prompt or response text**, ever. |
 | `email_sends` | `id` · `intake_id` · `idempotency_key` (unique) · `status` · `provider` · `created_at` | Idempotency and audit. The recipient is not stored here. It is always re-read from `field_values`. |
 | `staff_outputs` | `id` · `intake_id` · `kind` (staff_summary/benefit_demo) · `content` JSON · `created_at` | Generated drafts. |
 
@@ -595,7 +601,7 @@ There is **no** SOAP endpoint (D1).
 
 ### 10.2 Output (`guardrails/output.py`)
 
-- The LLM response must parse into `ReplyUnderstanding`. On a parse error or timeout, retry once. If it still fails, show the fixed "Typing is not working right now" message (§6) and log `llm_calls.status`. State does not change.
+- The LLM response must parse into `ReplyUnderstanding`. Each turn is one hedged request with an overall deadline (§6). If no valid result arrives in time, show the fixed "Typing is not working right now" message and log `llm_calls.status`. State does not change.
 - Proposals are checked as in §6.3 (real field, applicable, `raw_text` really appears in the message, value derived from `raw_text`).
 - An `email` proposal is only accepted when the pending field is `email`, or through a yes/no confirmation. It can never be accepted while the input flag says "send to".
 
@@ -679,7 +685,8 @@ class StaffSummary(BaseModel):
 | `REGION` | `US` | Selects the default phone-parsing region and the per-region content file `app/content/regions/<region>.toml` (crisis and emergency text: 911, 988). Crisis text lives only in these files, never in code. Startup fails if the file for `REGION` is missing. |
 | `MAX_MESSAGE_CHARS` | 1000 | |
 | `MAX_FIELD_ATTEMPTS` | 3 | |
-| `LLM_TIMEOUT_S` | 8 | Per attempt, one retry: worst case about 16 s. |
+| `LLM_DEADLINE_S` | 12 | Overall deadline per turn for the understanding call (§6). |
+| `LLM_HEDGE_AFTER_S` | 3 | Start one identical second request if there is no reply yet. |
 
 ---
 
@@ -695,7 +702,7 @@ class StaffSummary(BaseModel):
 | `tests/api` | FastAPI `TestClient` flows, tokens, idempotency, error shapes. |
 | `tests/regression` | One named test per Critical/High audit item (below). |
 
-CI (GitHub Actions) runs `uv sync --locked`, `ruff check`, `ruff format --check`, `mypy`, `pytest`, then the frontend `tsc`, `vitest` and axe checks. Live-LLM tests are marked `@pytest.mark.live`. They are deselected by default (`addopts = -m "not live"`) and in CI. Run them explicitly with `pytest -m live`.
+CI (GitHub Actions) runs `uv sync --locked`, `ruff check`, `ruff format --check`, `mypy`, `pytest`, then the frontend `tsc`, `vitest` and axe checks. Live-LLM tests are marked `@pytest.mark.live`. They are deselected by default (`addopts = -m "not live"`) and in CI. Run them explicitly with `pytest -m live`. **Live tests are a report, not a merge gate.** Failures caused by the API (timeouts, 429, 5xx) are reported, never fixed by loosening the tests.
 
 ### 13.2 Regression tests from the audit
 
@@ -803,6 +810,14 @@ The goal is **lower load per turn and zero repeated questions**. It is not fewer
   - field accuracy from V1's JSON output
 - Only scenarios that make sense for V1 are included (V1 has no pause/resume or review). Excluded categories are listed.
 - Results are written to `docs/EVAL_RESULTS.md` as a before/after table.
+
+### 14.4 Runner and the real API (plan for Phase 8)
+
+The Phase 5 live runs showed API timeouts, 429s and 5xx errors in bursts. The eval runner must not confuse these with model mistakes:
+- **Throttle:** a configurable requests-per-minute limit (`EVAL_RPM`), set below the key's quota. The owner checks the key's limits in AI Studio before Phase 8.
+- **Back off on 429:** pause and retry the conversation turn with exponential backoff and jitter, on top of the in-turn retry in §6.
+- **Resume:** results are saved after each conversation (one JSONL line per conversation). An interrupted run resumes from the first conversation without a saved result.
+- **Count API failures separately:** a turn that fails because of the API (`llm_calls.status` timeout or error, or `no_key`) is an API failure, not a model mistake. Accuracy and reply-kind metrics are computed over turns where the model answered; API failures are reported as their own rate, with `error_class` counts and how often the hedge fired and won.
 
 ---
 

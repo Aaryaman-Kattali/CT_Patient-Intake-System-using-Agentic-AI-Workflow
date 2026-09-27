@@ -1,11 +1,14 @@
 """The real ADK agent, driven by a scripted model (no network)."""
 
+import asyncio
 import os
+import time
 from pathlib import Path
 
 import pytest
 
 from app.agents.understanding_agent import (
+    APP_NAME,
     AdkUnderstander,
     NoKeyUnderstander,
     build_agent,
@@ -14,13 +17,20 @@ from app.agents.understanding_agent import (
 from app.config import Settings
 from app.domain.types import InputType
 from app.workflow.understanding import (
+    AgentReply,
     FieldBrief,
     ReplyKind,
     UnderstandingContext,
 )
-from tests.agent_helpers import RAISE, SLEEP, ScriptedLlm, request_text
-
-TEST_TIMEOUT = 30.0  # generous: the first ADK call in a cold CI process can be slow
+from tests.agent_helpers import (
+    RAISE,
+    SLEEP,
+    ApiError,
+    ScriptedLlm,
+    Slow,
+    make_understander,
+    request_text,
+)
 
 CONTEXT = UnderstandingContext(
     pending=FieldBrief(id="full_name", description="full name", input_type=InputType.TEXT),
@@ -51,9 +61,7 @@ GOOD = {
 
 def test_agent_parses_structured_output_and_reports_usage() -> None:
     llm = ScriptedLlm().reply_with(GOOD)
-    reply = AdkUnderstander(llm, timeout_s=TEST_TIMEOUT).understand(
-        "Alex Rivera, May 4 2004", CONTEXT
-    )
+    reply = make_understander(llm).understand("Alex Rivera, May 4 2004", CONTEXT)
     assert reply.understanding is not None
     assert reply.understanding.kind is ReplyKind.ANSWER_PLUS_EXTRA
     assert [p.field_id for p in reply.understanding.proposals] == ["full_name", "date_of_birth"]
@@ -63,7 +71,7 @@ def test_agent_parses_structured_output_and_reports_usage() -> None:
 
 def test_structured_output_schema_is_sent_to_the_model() -> None:
     llm = ScriptedLlm().reply_with(GOOD)
-    AdkUnderstander(llm, timeout_s=TEST_TIMEOUT).understand("Alex Rivera", CONTEXT)
+    make_understander(llm).understand("Alex Rivera", CONTEXT)
     config = llm.requests[0].config
     assert config is not None
     assert config.response_schema is not None or config.response_json_schema is not None
@@ -72,29 +80,22 @@ def test_structured_output_schema_is_sent_to_the_model() -> None:
 
 def test_bad_json_is_retried_once_then_fails_closed() -> None:
     llm = ScriptedLlm().reply_with("not json", "still not json")
-    reply = AdkUnderstander(llm, timeout_s=TEST_TIMEOUT).understand("Alex Rivera", CONTEXT)
+    reply = make_understander(llm).understand("Alex Rivera", CONTEXT)
     assert reply.understanding is None
     assert (reply.call.status, reply.call.attempts) == ("parse_error", 2)
 
 
 def test_retry_succeeds_on_second_attempt() -> None:
     llm = ScriptedLlm().reply_with('{"kind": "answer"', GOOD)
-    reply = AdkUnderstander(llm, timeout_s=TEST_TIMEOUT).understand("Alex Rivera", CONTEXT)
+    reply = make_understander(llm).understand("Alex Rivera", CONTEXT)
     assert reply.understanding is not None
     assert reply.call.attempts == 2
 
 
-def test_timeout_fails_closed() -> None:
-    llm = ScriptedLlm().reply_with(SLEEP, SLEEP)
-    reply = AdkUnderstander(llm, timeout_s=0.2).understand("Alex Rivera", CONTEXT)
-    assert reply.understanding is None
-    assert reply.call.status == "timeout"
-
-
 def test_one_understander_serves_many_calls_on_one_loop() -> None:
-    """Built once and reused: calls after a timeout still work (no per-call event loop)."""
-    llm = ScriptedLlm().reply_with(GOOD, SLEEP, SLEEP, GOOD, GOOD)
-    understander = AdkUnderstander(llm, timeout_s=2.0)
+    """Built once and reused: calls after a deadline still work (no per-call event loop)."""
+    llm = ScriptedLlm().reply_with(GOOD, SLEEP, GOOD)
+    understander = make_understander(llm, deadline_s=3.0)
     try:
         replies = [understander.understand("Alex Rivera", CONTEXT) for _ in range(3)]
     finally:
@@ -102,11 +103,100 @@ def test_one_understander_serves_many_calls_on_one_loop() -> None:
     assert [r.call.status for r in replies] == ["ok", "timeout", "ok"]
 
 
-def test_api_error_fails_closed_without_retry() -> None:
+# --- hedged requests (docs/V2_SPEC.md §6) -------------------------------------------------
+
+OTHER = {"kind": "off_topic", "proposals": []}
+
+
+def _call(reply: AgentReply) -> tuple[str, int, bool, int | None]:
+    return reply.call.status, reply.call.attempts, reply.call.hedged, reply.call.winner
+
+
+def _open_sessions(understander: AdkUnderstander) -> int:
+    listing = understander._sessions.list_sessions(app_name=APP_NAME, user_id="intake")
+    return len(asyncio.run_coroutine_threadsafe(listing, understander._loop).result().sessions)
+
+
+def test_fast_reply_needs_no_hedge() -> None:
+    llm = ScriptedLlm().reply_with(GOOD)
+    reply = make_understander(llm, hedge_after_s=5.0).understand("Alex Rivera", CONTEXT)
+    assert _call(reply) == ("ok", 1, False, 1)
+    assert len(llm.requests) == 1
+
+
+def test_slow_first_request_hedge_wins() -> None:
+    llm = ScriptedLlm().reply_with(Slow(3.0, OTHER), GOOD)
+    reply = make_understander(llm, hedge_after_s=0.3).understand("Alex Rivera", CONTEXT)
+    assert _call(reply) == ("ok", 2, True, 2)
+    assert reply.understanding is not None
+    assert reply.understanding.kind is ReplyKind.ANSWER_PLUS_EXTRA  # the hedge's reply
+    assert reply.call.latency_ms < 2500
+
+
+def test_both_requests_slow_end_at_the_deadline() -> None:
+    llm = ScriptedLlm().reply_with(SLEEP, SLEEP)
+    reply = make_understander(llm, deadline_s=1.0, hedge_after_s=0.2).understand("Alex", CONTEXT)
+    assert reply.understanding is None
+    assert _call(reply) == ("timeout", 2, True, None)
+    assert 900 <= reply.call.latency_ms < 2000
+
+
+def test_cancelled_request_never_writes_a_result() -> None:
+    llm = ScriptedLlm().reply_with(Slow(1.0, OTHER), GOOD)
+    understander = make_understander(llm, hedge_after_s=0.2)
+    reply = understander.understand("Alex Rivera", CONTEXT)
+    time.sleep(1.5)  # well past the moment the slow request would have answered
+    assert reply.understanding is not None
+    assert reply.understanding.kind is ReplyKind.ANSWER_PLUS_EXTRA
+    assert llm.finished == [2]  # request 1 was cancelled before it produced anything
+    assert _open_sessions(understander) == 0  # and its session was cleaned up
+
+
+@pytest.mark.parametrize("code", [429, 500, 503])
+def test_transient_api_error_is_retried_once(code: int) -> None:
+    llm = ScriptedLlm().reply_with(ApiError(code), GOOD)
+    reply = make_understander(llm).understand("Alex Rivera", CONTEXT)
+    assert _call(reply) == ("ok", 2, False, 2)
+
+
+def test_transient_error_twice_fails_with_its_error_class() -> None:
+    llm = ScriptedLlm().reply_with(ApiError(429), ApiError(429), GOOD)
+    reply = make_understander(llm).understand("Alex Rivera", CONTEXT)
+    assert _call(reply) == ("error", 2, False, None)
+    assert reply.call.error_class == "ClientError:429"
+    assert len(llm.requests) == 2
+
+
+@pytest.mark.parametrize("code", [400, 401, 403, 404])
+def test_other_client_errors_are_not_retried(code: int) -> None:
+    llm = ScriptedLlm().reply_with(ApiError(code), GOOD)
+    reply = make_understander(llm).understand("Alex Rivera", CONTEXT)
+    assert _call(reply) == ("error", 1, False, None)
+    assert reply.call.error_class == f"ClientError:{code}"
+    assert len(llm.requests) == 1
+
+
+def test_retry_waits_about_one_second_with_jitter() -> None:
+    llm = ScriptedLlm().reply_with(ApiError(503), GOOD)
+    reply = make_understander(llm, retry_delay_s=1.0).understand("Alex Rivera", CONTEXT)
+    assert reply.call.status == "ok"
+    assert 1000 <= reply.call.latency_ms < 3000
+
+
+def test_no_retry_when_the_delay_would_pass_the_deadline() -> None:
+    llm = ScriptedLlm().reply_with(ApiError(503), GOOD)
+    understander = make_understander(llm, deadline_s=3.0, retry_delay_s=5.0)
+    reply = understander.understand("Alex Rivera", CONTEXT)
+    assert _call(reply) == ("error", 1, False, None)
+    assert reply.call.error_class == "ServerError:503"
+
+
+def test_non_api_error_is_not_retried() -> None:
     llm = ScriptedLlm().reply_with(RAISE, GOOD)
-    reply = AdkUnderstander(llm, timeout_s=TEST_TIMEOUT).understand("Alex Rivera", CONTEXT)
+    reply = make_understander(llm).understand("Alex Rivera", CONTEXT)
     assert reply.understanding is None
     assert (reply.call.status, reply.call.attempts) == ("error", 1)
+    assert reply.call.error_class == "ConnectionError"
 
 
 @pytest.mark.parametrize("key", [None, "", "   "])
@@ -122,9 +212,7 @@ def test_unknown_kind_from_model_is_a_parse_error() -> None:
     llm = ScriptedLlm().reply_with(
         {"kind": "send_email", "proposals": []}, {"kind": "x", "proposals": []}
     )
-    assert (
-        AdkUnderstander(llm, timeout_s=TEST_TIMEOUT).understand("hi", CONTEXT).understanding is None
-    )
+    assert make_understander(llm).understand("hi", CONTEXT).understanding is None
 
 
 # --- B1 / B2 / B3: the agent's surface ---------------------------------------------------
@@ -147,7 +235,7 @@ def test_agent_has_no_read_tools_and_no_memory() -> None:
 
 def test_agent_input_contains_no_stored_values() -> None:
     llm = ScriptedLlm().reply_with(GOOD)
-    AdkUnderstander(llm, timeout_s=TEST_TIMEOUT).understand("Alex Rivera", CONTEXT)
+    make_understander(llm).understand("Alex Rivera", CONTEXT)
     sent = request_text(llm.requests[0])
     assert "Alex Rivera" in sent  # the current message, inside <user_message>
     assert sent.count("Alex Rivera") == 1
@@ -157,7 +245,7 @@ def test_agent_input_contains_no_stored_values() -> None:
 
 def test_each_call_is_stateless() -> None:
     llm = ScriptedLlm().reply_with(GOOD, GOOD)
-    understander = AdkUnderstander(llm, timeout_s=TEST_TIMEOUT)
+    understander = make_understander(llm)
     understander.understand("first message Alex Rivera", CONTEXT)
     understander.understand("second message", CONTEXT)
     assert "first message" not in request_text(llm.requests[1])
@@ -166,7 +254,7 @@ def test_each_call_is_stateless() -> None:
 def test_agents_do_not_write_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)
     llm = ScriptedLlm().reply_with(GOOD, "bad", "bad")
-    understander = AdkUnderstander(llm, timeout_s=TEST_TIMEOUT)
+    understander = make_understander(llm)
     understander.understand("Alex Rivera", CONTEXT)
     understander.understand("Alex Rivera", CONTEXT)
     assert os.listdir(tmp_path) == []

@@ -280,6 +280,8 @@ def test_one_reading_at_asked_question_is_explicit(
 
 
 def test_text_answer_keeps_the_model_label(d: Driver) -> None:
+    """The text normalizer cannot tell that "Al" is not a full name, so the one-reading rule
+    does not apply to text fields: an inferred text value is always confirmed."""
     _to(d, "full_name")
     view = d.text("call me Al", understood(A, ("full_name", "Al", "inferred")))
     assert view.question is not None

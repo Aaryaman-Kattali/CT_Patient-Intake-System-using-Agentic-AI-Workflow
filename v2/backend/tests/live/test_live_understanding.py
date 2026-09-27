@@ -60,7 +60,8 @@ def _type(d: Driver, message: str) -> TurnView:
     """Send typed text through the real service. A failed model call fails the test at once
     (with the reason, e.g. llm_error) instead of retrying and spending more API calls."""
     result = d.service.handle(d.id, d.view.turn, c.Text(text=message))
-    assert result.status == "applied", (result.status, result.reason)
+    last = d.service._repo.llm_calls(d.id)[-1:]  # test-only access
+    assert result.status == "applied", (result.status, result.reason, last)
     assert result.view is not None
     d.view = result.view
     return d.view
@@ -105,6 +106,9 @@ def _record_rows(record_property: RecordProperty, d: Driver) -> None:
                     "status",
                     "attempts",
                     "reply_kind",
+                    "hedged",
+                    "winner",
+                    "error_class",
                 }
             ),
         )

@@ -74,7 +74,10 @@ class LlmCallInfo(BaseModel):
     output_tokens: int | None = None
     latency_ms: int
     status: Literal["ok", "parse_error", "timeout", "error", "no_key"]
-    attempts: int = 1
+    attempts: int = 1  # requests started, including the hedge and any retry
+    hedged: bool = False  # a second identical request was started
+    winner: int | None = None  # which request gave the result (1 = the first)
+    error_class: str | None = None  # e.g. "ClientError:429", for failures
 
 
 class AgentReply(BaseModel):

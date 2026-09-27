@@ -34,7 +34,9 @@ class Settings(BaseSettings):
     region: str = Field(default="US", pattern=r"^[A-Z]{2}$")
     max_message_chars: int = Field(default=1000, ge=50, le=10_000)
     max_field_attempts: int = Field(default=3, ge=1, le=10)
-    llm_timeout_s: float = Field(default=8.0, gt=0)  # one retry: worst case ~16 s
+    # One hedged call per turn (docs/V2_SPEC.md §6): nothing runs past the deadline.
+    llm_deadline_s: float = Field(default=12.0, gt=0)
+    llm_hedge_after_s: float = Field(default=3.0, gt=0)
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
 
     @field_validator("synthetic_only")

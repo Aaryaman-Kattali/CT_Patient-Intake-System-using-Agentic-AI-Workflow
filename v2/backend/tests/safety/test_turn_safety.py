@@ -7,13 +7,13 @@ from pathlib import Path
 
 import pytest
 
-from app.agents.understanding_agent import AdkUnderstander, NoKeyUnderstander
+from app.agents.understanding_agent import NoKeyUnderstander
 from app.domain.types import Source
 from app.logging_setup import configure_logging
 from app.workflow import commands as c
 from app.workflow.states import State
 from app.workflow.understanding import AgentReply, ReplyKind, Understander, UnderstandingContext
-from tests.agent_helpers import RAISE, SLEEP, ScriptedLlm
+from tests.agent_helpers import RAISE, SLEEP, ApiError, Script, ScriptedLlm, make_understander
 from tests.workflow_helpers import (
     FI_CHILD_BOOK,
     Driver,
@@ -157,9 +157,13 @@ NOT_UNDERSTOOD = ("I did not understand. Here is the question again.",)
 def _failing(status: str) -> Understander:
     if status == "no_key":
         return NoKeyUnderstander("gemini-test")
-    scripts = {"timeout": (SLEEP, SLEEP), "error": (RAISE,), "parse_error": ("x", "x")}
-    script: tuple[str, ...] = scripts[status]
-    return AdkUnderstander(ScriptedLlm().reply_with(*script), timeout_s=0.2)
+    scripts: dict[str, tuple[Script, ...]] = {
+        "timeout": (SLEEP, SLEEP),
+        "error": (RAISE,),
+        "parse_error": ("x", "x"),
+    }
+    script = scripts[status]
+    return make_understander(ScriptedLlm().reply_with(*script), deadline_s=1.0, hedge_after_s=0.3)
 
 
 @pytest.mark.parametrize("status", ["no_key", "timeout", "error", "parse_error"])
@@ -197,6 +201,22 @@ def test_llm_unavailable_at_a_yes_no_question_points_to_the_buttons(d: Driver) -
     d.service._understander = NoKeyUnderstander("gemini-test")
     view = d.text("maybe, not sure what you mean", expect="rejected")
     assert view.info == UNAVAILABLE_BUTTONS
+
+
+def test_llm_call_row_records_hedge_and_error_class(d: Driver) -> None:
+    _at_full_name(d)
+    d.service._understander = make_understander(
+        ScriptedLlm().reply_with(ApiError(429), ApiError(503)), deadline_s=5.0
+    )
+    d.text("Alex Rivera", expect="rejected")
+    row = d.service._repo.llm_calls(d.id)[-1]
+    assert (row.status, row.attempts, row.hedged, row.winner, row.error_class) == (
+        "error",
+        2,
+        False,
+        None,
+        "ServerError:503",
+    )
 
 
 def test_model_worked_but_found_nothing_usable(d: Driver) -> None:

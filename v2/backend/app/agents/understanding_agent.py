@@ -5,22 +5,25 @@ values) and returns a proposal. The application validates and decides (docs/V2_S
 """
 
 import asyncio
+import concurrent.futures
+import functools
 import json
 import logging
 import threading
 import time
 import uuid
 from enum import StrEnum
-from typing import Literal
 
 from google.adk.agents import LlmAgent
 from google.adk.models import BaseLlm
 from google.adk.models.google_llm import Gemini
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
+from google.genai import errors as genai_errors
 from google.genai import types
 from pydantic import BaseModel, ValidationError
 
+from app.agents.hedging import AttemptResult, HedgeOutcome, HedgePolicy, hedged_call
 from app.agents.prompts import UNDERSTANDING_INSTRUCTION
 from app.config import Settings
 from app.workflow.understanding import (
@@ -35,8 +38,7 @@ from app.workflow.understanding import (
 log = logging.getLogger(__name__)
 
 APP_NAME = "intake_understanding"
-CallStatus = Literal["ok", "parse_error", "timeout", "error", "no_key"]
-MAX_ATTEMPTS = 2  # one retry on a parse error or timeout (spec §10.2)
+LOOP_GRACE_S = 2.0  # only if the event loop itself is stuck; the deadline is enforced inside
 
 
 # --- the schema Gemini must fill (plain lists and enums only) ------------------------
@@ -118,14 +120,29 @@ def gemini_model(settings: Settings) -> BaseLlm:
     return Gemini(model=settings.gemini_model, client_kwargs={"api_key": key})
 
 
+def classify_error(error: Exception) -> tuple[str, bool]:
+    """(error class for llm_calls, transient?). Only 429 and 5xx are worth retrying."""
+    if isinstance(error, genai_errors.APIError):
+        base = (
+            "ServerError"
+            if isinstance(error, genai_errors.ServerError)
+            else "ClientError"
+            if isinstance(error, genai_errors.ClientError)
+            else "APIError"
+        )
+        return f"{base}:{error.code}", error.code == 429 or 500 <= error.code < 600
+    return type(error).__name__, False
+
+
 class AdkUnderstander:
     """Built once. All calls run on one long-lived event loop in a background thread, so the
     Gemini client's connections stay valid between calls (a new loop per call breaks them).
+    Each turn is one hedged call with an overall deadline (see app/agents/hedging.py).
     """
 
-    def __init__(self, model: BaseLlm, timeout_s: float) -> None:
+    def __init__(self, model: BaseLlm, policy: HedgePolicy) -> None:
         self._model_name = model.model
-        self._timeout_s = timeout_s
+        self._policy = policy
         self._sessions = InMemorySessionService()
         self.agent = build_agent(model)
         self._runner = Runner(app_name=APP_NAME, agent=self.agent, session_service=self._sessions)
@@ -138,51 +155,52 @@ class AdkUnderstander:
     def understand(self, message: str, context: UnderstandingContext) -> AgentReply:
         prompt = build_prompt(message, context)
         started = time.monotonic()
-        status: CallStatus = "error"
-        usage: tuple[int | None, int | None] = (None, None)
-        for attempt in range(1, MAX_ATTEMPTS + 1):
-            try:
-                future = asyncio.run_coroutine_threadsafe(self._run(prompt), self._loop)
-                text, usage = future.result()
-                parsed = LlmReply.model_validate_json(text).to_understanding()
-            except TimeoutError:
-                status = "timeout"
-                continue
-            except (ValidationError, ValueError):
-                status = "parse_error"
-                continue
-            except Exception:  # network or SDK error: fail closed, never crash the turn
-                log.exception("understanding call failed")
-                status = "error"
-                break
-            return AgentReply(understanding=parsed, call=self._info("ok", started, usage, attempt))
-        return AgentReply(understanding=None, call=self._info(status, started, usage, attempt))
+        call = hedged_call(functools.partial(self._attempt, prompt), self._policy)
+        future = asyncio.run_coroutine_threadsafe(call, self._loop)
+        try:
+            outcome = future.result(timeout=self._policy.deadline_s + LOOP_GRACE_S)
+        except concurrent.futures.TimeoutError:  # the loop itself is stuck: fail closed
+            future.cancel()
+            outcome = HedgeOutcome(None, "timeout", attempts=0, hedged=False)
+        return AgentReply(understanding=outcome.value, call=self._info(outcome, started))
 
-    def _info(
-        self,
-        status: CallStatus,
-        started: float,
-        usage: tuple[int | None, int | None],
-        attempts: int,
-    ) -> LlmCallInfo:
+    def _info(self, outcome: HedgeOutcome[ReplyUnderstanding], started: float) -> LlmCallInfo:
         return LlmCallInfo(
             model=self._model_name,
-            input_tokens=usage[0],
-            output_tokens=usage[1],
+            input_tokens=outcome.usage[0],
+            output_tokens=outcome.usage[1],
             latency_ms=int((time.monotonic() - started) * 1000),
-            status=status,
-            attempts=attempts,
+            status=outcome.status,
+            attempts=outcome.attempts,
+            hedged=outcome.hedged,
+            winner=outcome.winner,
+            error_class=outcome.error_class,
         )
 
+    async def _attempt(self, prompt: str) -> AttemptResult[ReplyUnderstanding]:
+        """One request. Never raises, except when cancelled."""
+        try:
+            text, usage = await self._run(prompt)
+        except Exception as error:  # network or SDK error: reported, never crashes the turn
+            error_class, transient = classify_error(error)
+            log.warning(
+                "understanding attempt failed: %s", error_class, extra={"error_class": error_class}
+            )
+            return AttemptResult(failure="error", error_class=error_class, transient=transient)
+        try:
+            parsed = LlmReply.model_validate_json(text).to_understanding()
+        except (ValidationError, ValueError):
+            return AttemptResult(usage=usage, failure="parse_error")
+        return AttemptResult(value=parsed, usage=usage)
+
     async def _run(self, prompt: str) -> tuple[str, tuple[int | None, int | None]]:
-        """One stateless run: a fresh session, deleted afterwards. Only the model call is
-        timed out; the in-memory session setup is not."""
+        """One stateless run: a fresh session, deleted afterwards (also when cancelled)."""
         session_id = uuid.uuid4().hex
         await self._sessions.create_session(
             app_name=APP_NAME, user_id="intake", session_id=session_id
         )
         try:
-            return await asyncio.wait_for(self._call(session_id, prompt), self._timeout_s)
+            return await self._call(session_id, prompt)
         finally:
             await self._sessions.delete_session(
                 app_name=APP_NAME, user_id="intake", session_id=session_id
@@ -221,4 +239,7 @@ class NoKeyUnderstander:
 def build_understander(settings: Settings) -> AdkUnderstander | NoKeyUnderstander:
     if settings.google_api_key is None:
         return NoKeyUnderstander(settings.gemini_model)
-    return AdkUnderstander(gemini_model(settings), timeout_s=settings.llm_timeout_s)
+    policy = HedgePolicy(
+        deadline_s=settings.llm_deadline_s, hedge_after_s=settings.llm_hedge_after_s
+    )
+    return AdkUnderstander(gemini_model(settings), policy)
