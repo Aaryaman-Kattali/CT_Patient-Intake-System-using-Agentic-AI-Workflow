@@ -18,6 +18,7 @@ from typing import Literal, Protocol
 from uuid import UUID
 
 from app.domain.fields import answer_value
+from app.domain.templates import DEMO_NO_CONTACT
 from app.guardrails import policy
 from app.services.persistence import IntakeRepository
 from app.workflow.snapshot import EventRecord
@@ -34,6 +35,16 @@ BODY = (
     "",
     "This is a demo. The details in it are made up.",
 )
+
+
+def body_lines(synthetic: bool) -> tuple[str, ...]:
+    """The fixed body. While SYNTHETIC_ONLY, the promise of contact is followed by the demo line."""
+    if not synthetic:
+        return BODY
+    at = BODY.index("A staff member will read it and contact you.") + 1
+    return (*BODY[:at], DEMO_NO_CONTACT, *BODY[at:])
+
+
 # Reserved names (RFC 2606 / 6761): mail to these can never reach a real person.
 # The same set the repository's PII scan allows in test data.
 RESERVED_DOMAINS = frozenset({"example.com", "example.org", "example.net"})
@@ -100,9 +111,12 @@ _DENIALS: dict[str, EmailStatus] = {
 
 
 class EmailService:
-    def __init__(self, repo: IntakeRepository, provider: EmailProvider) -> None:
+    def __init__(
+        self, repo: IntakeRepository, provider: EmailProvider, *, synthetic: bool = True
+    ) -> None:
         self._repo = repo
         self._provider = provider
+        self._synthetic = synthetic
 
     def send_confirmation(self, intake_id: UUID, idempotency_key: str) -> EmailResult:
         snap = self._repo.load(intake_id)
@@ -117,7 +131,8 @@ class EmailService:
         first = self._repo.claim_email(intake_id, idempotency_key, self._provider.name)
         if first is not None:
             return EmailResult(status=_status(first.status), repeated=True)
-        status = self._deliver(Outgoing(recipient, SUBJECT, "\n".join(BODY)))
+        body = "\n".join(body_lines(self._synthetic))
+        status = self._deliver(Outgoing(recipient, SUBJECT, body))
         event = EventRecord(type="email_sent" if status == "sent" else "email_failed")
         self._repo.finish_email(intake_id, idempotency_key, status, (event,))
         return EmailResult(status=status)

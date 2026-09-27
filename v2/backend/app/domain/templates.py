@@ -4,6 +4,7 @@ crisis text (content/regions/*.toml). Plain, literal, no blame, no exclamation m
 Placeholders use str.format. All text here is checked by tests/unit/test_wording.py.
 """
 
+import re
 from types import MappingProxyType
 
 # --- Validation retries: shown before the same question again. Never "invalid" or "wrong".
@@ -51,6 +52,11 @@ PAUSED = (
     "To come back, open this page again or use this code.",
     "Write this code down.",
 )
+# The code on request, from the Take a break area (any time after starting).
+RESUME_CODE_INFO = (
+    "With this code you can come back to your form on any device.",
+    "Write this code down.",
+)
 WELCOME_BACK = "Welcome back."
 WELCOME_BACK_NAME = "Welcome back, {name}."
 
@@ -77,19 +83,24 @@ OVERWHELMED = (
 )
 EMAIL_SENT = "We sent an email to say we have your form."
 MANY_TRIES = "We can come back to this question later."
-# "Talk to a person": what happens next. The answers stay saved either way.
-NEEDS_HUMAN = (
-    "We have asked a staff member to contact you.",
-    "They will use the phone number or email in your form.",
-    "Your answers are saved.",
-    "You can keep going on your own at any time.",
+# "Talk to a person": the real-clinic lines come from the region file; these follow them.
+NEEDS_HUMAN = ("Your answers are saved.", "You can keep going on your own at any time.")
+NEEDS_HUMAN_NO_CONTACT = ("Your answers are saved.", "You can keep going on your own and add one.")
+# Shown right after any fixed text that promises a human action, while SYNTHETIC_ONLY.
+DEMO_NO_CONTACT = "This is a demo. No one will contact you."
+HUMAN_PROMISE = re.compile(
+    r"\bwill\b[^.]*\b(contact|call|email)\b|\basked a staff member\b", re.IGNORECASE
 )
-NEEDS_HUMAN_NO_CONTACT = (
-    "We have asked a staff member to help you.",
-    "We do not have a phone number or email for you yet.",
-    "Your answers are saved.",
-    "You can keep going on your own and add one.",
-)
+
+
+def promises_contact(text: str) -> bool:
+    return text != DEMO_NO_CONTACT and HUMAN_PROMISE.search(text) is not None
+
+
+def with_demo_notice(text: str, synthetic: bool) -> str:
+    """One string (e.g. a field's `why`): the demo line is added after a promise of contact."""
+    return f"{text} {DEMO_NO_CONTACT}" if synthetic and promises_contact(text) else text
+
 
 # --- Review screen.
 REVIEW_STILL_NEEDED = "Still needed"

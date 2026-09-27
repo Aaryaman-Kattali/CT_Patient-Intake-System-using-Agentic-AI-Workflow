@@ -97,6 +97,7 @@ def test_email_endpoint_rejects_recipient_in_body(api: Api, field: str) -> None:
         "code": "invalid_request",
         "message": "The request was not in the right shape.",
         "view": None,
+        "actions": [],
     }
     assert api.provider.sent == []
 

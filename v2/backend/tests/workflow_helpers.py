@@ -206,8 +206,13 @@ class EngineHarness:
         self.snap = snap
         self.events: list[EventRecord] = []
         self.view = render(snap)
+        content = load_region_content("US")
         self.config = EngineConfig(
-            today=TODAY, region="US", max_field_attempts=3, crisis=load_region_content("US").crisis
+            today=TODAY,
+            region="US",
+            max_field_attempts=3,
+            crisis=content.crisis,
+            needs_human=content.needs_human,
         )
 
     def send(self, command: c.Command, u: ReplyUnderstanding | None = None) -> bool:

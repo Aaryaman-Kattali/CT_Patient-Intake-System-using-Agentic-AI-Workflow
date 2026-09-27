@@ -75,6 +75,7 @@ def test_token_required_and_same_answer_as_unknown_id(api: Api, token: str | Non
             "code": "intake_not_found",
             "message": "We could not find this form.",
             "view": None,
+            "actions": [],
         }
     )
 
@@ -107,7 +108,12 @@ def test_talk_to_a_person_keeps_answers_and_says_what_happens_next(api: Api) -> 
     view = tab.reply({"kind": "talk_to_person"})
     assert view["state"] == "needs_human"
     assert view["question"] is None
-    assert list(view["info"]) == list(t.NEEDS_HUMAN_NO_CONTACT)  # no phone or email yet
+    assert view["info"] == [  # no phone or email yet
+        "We have asked a staff member to help you.",
+        "We do not have a phone number or email for you yet.",
+        "This is a demo. No one will contact you.",
+        *t.NEEDS_HUMAN_NO_CONTACT,
+    ]
     assert [a["id"] for a in view["actions"]] == ["continue_alone"]
     review = tab.api.client.get(tab.url("/review"), headers=tab.headers).json()
     assert review["review"]["answered"] == answered_before["review"]["answered"]
@@ -120,7 +126,12 @@ def test_talk_to_a_person_with_contact_details(api: Api) -> None:
     tab.run({**FI_SELF_BOOK})
     tab.post("/review/edit", {"turn": tab.view["turn"], "field_id": "gender"})
     view = tab.reply({"kind": "talk_to_person"})
-    assert list(view["info"]) == list(t.NEEDS_HUMAN)
+    assert view["info"] == [
+        "We have asked a staff member to contact you.",
+        "They will use the phone number or email in your form.",
+        "This is a demo. No one will contact you.",
+        *t.NEEDS_HUMAN,
+    ]
 
 
 def test_review_lists_answers_by_section_and_what_is_missing(api: Api) -> None:

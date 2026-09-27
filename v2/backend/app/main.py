@@ -4,6 +4,8 @@ Everything stateful (database engine, understander, services, rate limiters) is 
 in the lifespan and kept on `app.state`. There are no module-level globals (audit #5).
 """
 
+import os
+import sys
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from datetime import date
@@ -14,14 +16,21 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.agents.understanding_agent import build_understander
 from app.api.errors import install_error_handlers
 from app.api.routes import Services, router
-from app.config import Settings
+from app.config import Settings, load_region_content
+from app.domain import templates as t
 from app.logging_setup import configure_logging
+from app.runtime import warn_if_multiple_workers
 from app.services.email import EmailProvider, EmailService, build_provider
 from app.services.intake_service import IntakeService
 from app.services.persistence import IntakeRepository, create_db_engine
-from app.services.rate_limit import FailureLimiter
+from app.services.rate_limit import RESUME_WINDOW_S, FailureLimiter
 from app.services.staff_outputs import StaffOutputs
 from app.workflow.understanding import Understander
+
+
+def _person_help(settings: Settings) -> tuple[str, ...]:
+    lines = load_region_content(settings.region).needs_human.no_form
+    return (*lines, t.DEMO_NO_CONTACT) if settings.synthetic_only else tuple(lines)
 
 
 def create_app(
@@ -37,6 +46,7 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        warn_if_multiple_workers(sys.argv, os.environ)
         engine = create_db_engine(settings.database_url)
         repo = IntakeRepository(engine)
         agent = understander or build_understander(settings)  # built once per process
@@ -44,13 +54,14 @@ def create_app(
         provider = email_provider or build_provider(
             settings.email_provider, settings.email_outbox_dir
         )
-        window = settings.resume_failure_window_s
+        window = RESUME_WINDOW_S
         app.state.services = Services(
             intakes=intakes,
-            email=EmailService(repo, provider),
+            email=EmailService(repo, provider, synthetic=settings.synthetic_only),
             outputs=StaffOutputs(repo),
             code_failures=FailureLimiter(settings.resume_max_failures_per_code, window),
             client_failures=FailureLimiter(settings.resume_max_failures_per_client, window),
+            person_help=_person_help(settings),
         )
         try:
             yield

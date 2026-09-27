@@ -51,7 +51,9 @@ def _touch_every_endpoint(api: Api) -> None:
     tab.get()
     tab.post("/start", {"turn": 99}, expect=409)  # stale
     tab.reply({"kind": "skip"}, expect=409)  # not available before start
+    tab.post("/resume-code", expect=409)  # not started yet
     tab.turn("/start")
+    tab.post("/resume-code")
     tab.choose("family_inquiry")
     tab.choose("me")
     code = tab.turn("/pause")["resume_code"]
@@ -74,6 +76,7 @@ def _touch_every_endpoint(api: Api) -> None:
     client.post("/intakes/resume", json={"resume_code": "ABC-DEF"})
     client.post("/intakes/resume", json={"nope": 1})
     client.get("/intakes/00000000-0000-4000-8000-000000000000")
+    client.get("/help/person")
     client.get("/no-such-page")
 
 
@@ -124,7 +127,7 @@ def test_every_endpoint_was_exercised(recorded: tuple[FastAPI, list[Recorded]]) 
     endpoints = {
         (r.path, m) for r in api_routes(app.routes) if r.path != "/health" for m in r.methods or ()
     }
-    assert len(endpoints) == 13
+    assert len(endpoints) == 15
     assert endpoints - hit == set()
 
 
@@ -137,9 +140,14 @@ def test_openapi_declares_models_for_every_response(tmp_path: Path) -> None:
                 content = response.get("content", {}).get("application/json", {})
                 assert "schema" in content, (method, path, status)
     components = schema["components"]["schemas"]
-    assert {"TurnView", "ErrorBody", "SessionView", "StaffSummary", "BenefitSummary"} <= set(
-        components
-    )
+    assert {
+        "TurnView",
+        "ErrorBody",
+        "SessionView",
+        "StaffSummary",
+        "BenefitSummary",
+        "ResumeCodeView",
+    } <= set(components)
     question = components["TurnView"]["properties"]["question"]
     kinds = {option.get("type") for option in question["anyOf"]}
     assert "array" not in kinds  # one question object or null, never a list (P1)

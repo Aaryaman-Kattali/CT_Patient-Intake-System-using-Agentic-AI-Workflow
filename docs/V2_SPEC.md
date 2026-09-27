@@ -533,9 +533,11 @@ The DB file path comes from `DATABASE_URL`. The default is `~/.intake-v2/intake.
 - The database stores only a scrypt hash (fixed salt derived from `APP_SECRET`, so it can be indexed), written at the first pause.
 - Every pause shows the code again in its own `resume_code` field (the UI adds a copy button), with the fixed line "Write this code down."
 - Lookup accepts any case, spaces or dashes, and rejects malformed input before hashing.
-- **Rate limits (Phase 6):** failed attempts are counted per code (normalized, so any spelling counts as the same code) and per client address, in a sliding window (defaults: 5 per code, 20 per client, per 15 minutes; in memory). Past the limit, even a correct code gets `429 too_many_attempts`. Every failure gets the same fixed answer (`resume_failed`), whether the code exists, is malformed, or has not been issued yet.
+- **Input:** case, spaces and dashes are ignored before checking ("k7p 4mx" = "K7P-4MX").
+- **Rate limits (Phase 6):** failed attempts are counted per code (normalized, so any spelling counts as the same code) and per client address, in a fixed 15-minute sliding window (5 per code, 10 per client; the counts are configurable, the window is not, because the lockout message names it). Past a limit, even a correct code gets `429 too_many_attempts` with one fixed message for every locked-out client: "Please wait 15 minutes, then try again. Your answers are safe.", plus a "Talk to a person" action (its text comes from `GET /help/person`). Every other failure gets the same fixed answer (`resume_failed`), whether the code exists, is malformed, or has not been issued yet.
+- **In memory, so one process.** The limiter (and the 429 hedge cooldown, §6) live in process memory. The API must run as a **single process** (one uvicorn worker). At startup the app logs a warning if more than one worker is configured (`--workers`/`-w` > 1 or `WEB_CONCURRENCY` > 1).
 - **New device:** a correct code issues a **new token** and the old one stops working. A paused intake is resumed right away.
-- The code is shown when the user pauses (§9.1), not at creation: its hash is only stored at the first pause.
+- The code is shown when the user pauses, and **on request** from the "Take a break" area any time after the intake has started (`POST /intakes/{id}/resume-code`). Asking for it stores its hash, so it works at once. It is not shown at creation: before starting there is nothing to come back to.
 
 **Unresolved conflicts.** "I'm not sure" on a conflict question (a button, or typed "I don't know") keeps the earlier value and saves the other answer in `field_values.unresolved_other`, with a `conflict_unresolved` event. Any later change to that field clears it.
 
@@ -559,7 +561,9 @@ Every state-changing request carries the `turn` the client last saw (§8). Reque
 | `POST /intakes/{id}/replies` | `{turn, command}`: `choose`, `text`, `skip`, `undo`, `keep_going`, `talk_to_person`, `mark_unknown` | `Turn` | 404, 409 |
 | `POST /intakes/{id}/pause` | → PAUSED | `Turn` with `resume_code` | 404, 409 |
 | `POST /intakes/{id}/resume` | PAUSED → where they were; NEEDS_HUMAN → "Continue on my own" | `Turn` | 404, 409 |
-| `POST /intakes/resume` | `{resume_code}` from a new device (no token) | `SessionView` with a **new** token | 400 `resume_failed`, 429 `too_many_attempts` |
+| `POST /intakes/resume` | `{resume_code}` from a new device (no token) | `SessionView` with a **new** token | 400 `resume_failed`, 429 `too_many_attempts` (with a "Talk to a person" action) |
+| `POST /intakes/{id}/resume-code` | The resume code on request ("Take a break" area), any time after starting | `ResumeCodeView {resume_code, info}` | 404, 409 before starting |
+| `GET /help/person` | "Talk to a person" text when no form is open (e.g. locked out) | `HelpView {info}` | – |
 | `GET /intakes/{id}/review` | All answers (with their section) plus what is missing, in any state | `Turn` with `review` | 404 |
 | `POST /intakes/{id}/review/edit` | `{turn, field_id}` → pins that question | `Turn` | 404, 409 |
 | `POST /intakes/{id}/submit` | REVIEW → SUBMITTED | `Turn` | 409 `form_incomplete` (view lists what is missing), 409 `action_not_available` outside REVIEW |
@@ -609,7 +613,9 @@ There is **no** SOAP endpoint (D1). The conversational endpoints answer only wit
 
 `question` is **one object or null**, never a list. That is P1 at the API boundary (checked in the OpenAPI schema too). `info` carries fixed non-question text (the `why` answer, distress guidance, pause instructions, what happens after "Talk to a person"). `review` is filled in REVIEW and by `GET /review`. `resume_code` is filled only while paused.
 
-**"Talk to a person".** NEEDS_HUMAN shows fixed text saying what happens next: a staff member will contact them using the phone number or email in the form (or, if there is none yet, that we do not have one and they can keep going and add one), that their answers are saved, and that they can keep going on their own at any time. Answers are never changed by this.
+**"Talk to a person".** NEEDS_HUMAN shows fixed text saying what happens next: a staff member will contact them using the phone number or email in the form (or, if there is none yet, that we do not have one and they can keep going and add one), that their answers are saved, and that they can keep going on their own at any time. Answers are never changed by this. The real-clinic lines live in the region content file (`[needs_human]`).
+
+**Demo line.** While `SYNTHETIC_ONLY` (always, in this demo), any fixed text that promises a human action ("will contact / call / email", "asked a staff member") is followed by the fixed line "This is a demo. No one will contact you." This applies to "Talk to a person", the crisis response, the `why` text of the contact-method question, the confirmation email and `GET /help/person`. A test scans all fixed text for such promises and checks the demo line is shown right after each one.
 
 ---
 
@@ -709,9 +715,8 @@ class StaffSummary(BaseModel):
 | `EMAIL_PROVIDER` | `console` | `console` / `file`. No real email is ever sent. |
 | `EMAIL_OUTBOX_DIR` | `~/.intake-v2/outbox` | For the `file` provider. Outside the repository. |
 | `FRONTEND_ORIGIN` | `http://localhost:5173` | The only CORS origin. |
-| `RESUME_MAX_FAILURES_PER_CODE` | 5 | Failed resume attempts per code per window. |
-| `RESUME_MAX_FAILURES_PER_CLIENT` | 20 | Failed resume attempts per client address per window. |
-| `RESUME_FAILURE_WINDOW_S` | 900 | Sliding window for both limits. |
+| `RESUME_MAX_FAILURES_PER_CODE` | 5 | Failed resume attempts per code per 15 minutes. |
+| `RESUME_MAX_FAILURES_PER_CLIENT` | 10 | Failed resume attempts per client address per 15 minutes. The window is fixed. |
 | `REGION` | `US` | Selects the default phone-parsing region and the per-region content file `app/content/regions/<region>.toml` (crisis and emergency text: 911, 988). Crisis text lives only in these files, never in code. Startup fails if the file for `REGION` is missing. |
 | `MAX_MESSAGE_CHARS` | 1000 | |
 | `MAX_FIELD_ATTEMPTS` | 3 | |

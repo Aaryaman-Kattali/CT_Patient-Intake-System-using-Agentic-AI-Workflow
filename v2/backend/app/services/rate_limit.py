@@ -8,6 +8,9 @@ import time
 from collections import deque
 from collections.abc import Callable
 
+# Resume-code lockouts last 15 minutes. The fixed lockout message says so.
+RESUME_WINDOW_S = 15 * 60
+
 
 class FailureLimiter:
     def __init__(

@@ -21,6 +21,10 @@ call needs the `X-Intake-Token` header returned by `POST /intakes`. No real emai
 the `console` provider logs one line, the `file` provider writes `.eml` files to
 `~/.intake-v2/outbox`.
 
+**Run a single process** (one uvicorn worker, the default). The resume-code rate limits are
+kept in memory, so several workers would each keep their own counts. The app logs a warning
+at startup if `--workers` or `WEB_CONCURRENCY` asks for more than one.
+
 ## Settings
 
 Copy `.env.example` to `.env` in this folder. `.env` is gitignored.

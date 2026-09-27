@@ -9,7 +9,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date
 
-from app.config import CrisisContent
+from app.config import CrisisContent, NeedsHumanContent
 from app.domain import templates as t
 from app.domain.fields import FieldDef, FieldState, answer_value
 from app.domain.normalizers import match_yes_no
@@ -55,6 +55,8 @@ class EngineConfig:
     region: str
     max_field_attempts: int
     crisis: CrisisContent
+    needs_human: NeedsHumanContent
+    synthetic: bool = True  # adds the "no one will contact you" demo line
 
 
 @dataclass
@@ -454,7 +456,10 @@ def _clarify(turn: _Turn, q: CurrentQuestion | None, u: ReplyUnderstanding) -> R
     if q is None:
         return _reject("no_question")
     fld = get_field(q.item.field_id) if isinstance(q, QueueQuestion) else q.field
-    turn.notes.info.append(fld.why if u.clarification == "why" else fld.help)
+    text = fld.why if u.clarification == "why" else fld.help
+    turn.notes.info.append(text)
+    if turn.config.synthetic and t.promises_contact(text):
+        turn.notes.info.append(t.DEMO_NO_CONTACT)
     turn.event("clarification_shown", fld.id, reason=u.clarification or "meaning")
     return turn.finish(Trigger.INFO, turn.start.state)
 
@@ -714,6 +719,10 @@ def _needs_human(turn: _Turn, *, crisis: bool) -> Result:
         turn.notes.info += [crisis_text.heading, *crisis_text.lines]
         turn.event("distress_shown", level="crisis")
     reachable = any(answer_value(turn.answers, f) for f in ("phone", "email"))
+    people = turn.config.needs_human
+    turn.notes.info += people.with_contact if reachable else people.without_contact
+    if turn.config.synthetic:
+        turn.notes.info.append(t.DEMO_NO_CONTACT)
     turn.notes.info += list(t.NEEDS_HUMAN if reachable else t.NEEDS_HUMAN_NO_CONTACT)
     turn.notes.actions.append("continue_alone")
     turn.event("needs_human", reason="crisis" if crisis else "requested")

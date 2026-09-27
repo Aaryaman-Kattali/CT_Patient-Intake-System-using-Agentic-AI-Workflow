@@ -15,8 +15,10 @@ from app.api.schemas import (
     EditRequest,
     EmailRequest,
     ErrorBody,
+    HelpView,
     ReplyRequest,
     ResumeCodeRequest,
+    ResumeCodeView,
     SessionView,
     TurnRequest,
 )
@@ -40,6 +42,7 @@ class Services:
     outputs: StaffOutputs
     code_failures: FailureLimiter
     client_failures: FailureLimiter
+    person_help: tuple[str, ...]  # "Talk to a person" with no form open
 
 
 def _errors(*statuses: int) -> dict[int | str, dict[str, Any]]:
@@ -98,6 +101,23 @@ def resume_with_code(body: ResumeCodeRequest, request: Request, svc: ServicesDep
         svc.client_failures.record_failure(client_key)
         raise ApiError(400, "resume_failed")
     return SessionView(id=opened.intake_id, token=opened.token, view=opened.view)
+
+
+@router.post(
+    "/intakes/{intake_id}/resume-code", response_model=ResumeCodeView, responses=_errors(404, 409)
+)
+def resume_code(intake_id: IntakeId, svc: ServicesDep) -> ResumeCodeView:
+    """The resume code on request, any time after starting ("Take a break" area)."""
+    code = svc.intakes.resume_code_on_request(intake_id)
+    if code is None:
+        raise ApiError(409, "action_not_available")
+    return ResumeCodeView(resume_code=code, info=t.RESUME_CODE_INFO)
+
+
+@router.get("/help/person", response_model=HelpView, responses=_errors())
+def person_help(svc: ServicesDep) -> HelpView:
+    """What to do to talk to a person when no form is open (e.g. after a lockout)."""
+    return HelpView(info=svc.person_help)
 
 
 # --- turns --------------------------------------------------------------------------------

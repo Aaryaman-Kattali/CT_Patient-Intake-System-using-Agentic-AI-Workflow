@@ -14,7 +14,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api.schemas import ErrorBody, ErrorCode
 from app.domain import templates as t
-from app.workflow.view import TurnView
+from app.workflow.view import ActionView, TurnView
 
 log = logging.getLogger(__name__)
 
@@ -34,13 +34,19 @@ MESSAGES: MappingProxyType[ErrorCode, str] = MappingProxyType(
         "email_failed": "The email could not be sent. Please try again later.",
         "not_submitted": "This is ready after the form is sent.",
         "resume_failed": "That code did not work. Please check it and try again.",
-        "too_many_attempts": "Too many tries. Please wait a few minutes and try again.",
+        "too_many_attempts": "Please wait 15 minutes, then try again. Your answers are safe.",
         "internal_error": "Something did not work on our side. Your saved answers are safe.",
     }
 )
 
 _HTTP_CODES: MappingProxyType[int, ErrorCode] = MappingProxyType(
     {404: "not_found", 405: "method_not_allowed", 422: "invalid_request"}
+)
+
+
+# Errors that offer a way out: the button is part of the fixed answer.
+_ACTIONS: MappingProxyType[ErrorCode, tuple[str, ...]] = MappingProxyType(
+    {"too_many_attempts": ("talk_to_a_person",)}
 )
 
 
@@ -53,7 +59,8 @@ class ApiError(Exception):
 
 
 def error_response(status: int, code: ErrorCode, view: TurnView | None = None) -> JSONResponse:
-    body = ErrorBody(code=code, message=MESSAGES[code], view=view)
+    actions = tuple(ActionView(id=a, label=t.BUTTONS[a]) for a in _ACTIONS.get(code, ()))
+    body = ErrorBody(code=code, message=MESSAGES[code], view=view, actions=actions)
     return JSONResponse(status_code=status, content=body.model_dump(mode="json"))
 
 

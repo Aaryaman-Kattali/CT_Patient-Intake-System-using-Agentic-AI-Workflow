@@ -5,18 +5,22 @@ from typing import Any
 
 import httpx2
 
-from app.services.rate_limit import FailureLimiter
+from app.config import Settings
+from app.services.rate_limit import RESUME_WINDOW_S, FailureLimiter
+from app.services.resume_codes import normalize
 from tests.api_helpers import Api, Tab, api_client
 
-FAILED = {
+FAILED: dict[str, Any] = {
     "code": "resume_failed",
     "message": "That code did not work. Please check it and try again.",
     "view": None,
+    "actions": [],
 }
-LIMITED = {
+LIMITED: dict[str, Any] = {  # the same for every locked-out client
     "code": "too_many_attempts",
-    "message": "Too many tries. Please wait a few minutes and try again.",
+    "message": "Please wait 15 minutes, then try again. Your answers are safe.",
     "view": None,
+    "actions": [{"id": "talk_to_a_person", "label": "Talk to a person"}],
 }
 WRONG_CODE = "ABC-DEF"  # valid shape, no such intake
 
@@ -78,10 +82,11 @@ def test_rate_limited_per_code(tmp_path: Path) -> None:
 
 
 def test_rate_limited_per_client_even_for_a_correct_code(tmp_path: Path) -> None:
-    with api_client(tmp_path, resume_max_failures_per_client=3) as api:
+    with api_client(tmp_path) as api:  # default: 10 failures per client per 15 minutes
         _, code = _paused(api)
-        for wrong in ("ABC-DEF", "ABC-DEG", "ABC-DEH"):
-            _resume(api, wrong)
+        wrong_codes = [f"ABC-D{a}{b}" for a in "EFGH" for b in "JKM"][:10]
+        for wrong in wrong_codes:
+            assert _json(_resume(api, wrong)) == FAILED
         response = _resume(api, code)
         assert response.status_code == 429
         assert _json(response) == LIMITED
@@ -96,3 +101,49 @@ def test_failure_window_expires() -> None:
     now[0] = 61.0
     assert not limiter.blocked("k")
     assert limiter._failures == {}  # expired keys are dropped
+
+
+def test_resume_codes_ignore_case_spaces_and_dashes() -> None:
+    assert normalize("k7p 4mx") == normalize("K7P-4MX") == "K7P4MX"
+    assert normalize(" k7p-4mx ") == "K7P4MX"
+    assert normalize("K7P-4M") is None  # too short
+    assert normalize("K7P-4MO") is None  # O is not in the alphabet (looks like 0)
+
+
+def test_issued_code_works_in_any_spelling(tmp_path: Path) -> None:
+    with api_client(tmp_path) as api:
+        _, code = _paused(api)
+        for spelling in (code, code.lower().replace("-", " "), code.replace("-", "")):
+            assert _resume(api, spelling).status_code == 200
+
+
+def test_per_client_default_is_ten_per_15_minutes() -> None:
+    assert Settings().resume_max_failures_per_client == 10
+    assert RESUME_WINDOW_S == 15 * 60
+
+
+def test_lockout_offers_talk_to_a_person(tmp_path: Path) -> None:
+    with api_client(tmp_path, resume_max_failures_per_code=1) as api:
+        _resume(api, WRONG_CODE)
+        assert _json(_resume(api, WRONG_CODE)) == LIMITED
+        help_view = api.client.get("/help/person").json()
+        assert help_view["info"] == [
+            "To talk to a person, call the clinic and say you need help with your form.",
+            "This is a demo. No one will contact you.",
+        ]
+
+
+def test_code_on_request_after_start_works_at_once(tmp_path: Path) -> None:
+    with api_client(tmp_path) as api:
+        tab = api.new_intake()
+        assert tab.post("/resume-code", expect=409)["code"] == "action_not_available"
+        tab.turn("/start")
+        shown = tab.post("/resume-code")
+        assert shown["info"] == [
+            "With this code you can come back to your form on any device.",
+            "Write this code down.",
+        ]
+        assert tab.post("/resume-code")["resume_code"] == shown["resume_code"]  # stable
+        opened = _resume(api, shown["resume_code"])  # works without ever pausing
+        assert opened.status_code == 200
+        assert _json(opened)["view"]["state"] == "choose_intake_type"

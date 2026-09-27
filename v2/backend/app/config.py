@@ -36,10 +36,10 @@ class Settings(BaseSettings):
     email_outbox_dir: Path = DEFAULT_OUTBOX_DIR
     # The only origin the browser may call the API from (CORS).
     frontend_origin: str = "http://localhost:5173"
-    # Failed resume-code attempts allowed per window, per code and per client.
+    # Failed resume-code attempts allowed per 15 minutes, per code and per client. The
+    # window is fixed (RESUME_WINDOW_S) because the lockout message names it.
     resume_max_failures_per_code: int = Field(default=5, ge=1)
-    resume_max_failures_per_client: int = Field(default=20, ge=1)
-    resume_failure_window_s: float = Field(default=900.0, gt=0)
+    resume_max_failures_per_client: int = Field(default=10, ge=1)
     region: str = Field(default="US", pattern=r"^[A-Z]{2}$")
     max_message_chars: int = Field(default=1000, ge=50, le=10_000)
     max_field_attempts: int = Field(default=3, ge=1, le=10)
@@ -77,9 +77,18 @@ class CrisisContent(BaseModel):
     keywords: list[str] = Field(min_length=1)  # checked before any LLM call
 
 
+class NeedsHumanContent(BaseModel):
+    """What happens after "Talk to a person", in a real clinic (region-specific)."""
+
+    with_contact: list[str] = Field(min_length=1)
+    without_contact: list[str] = Field(min_length=1)
+    no_form: list[str] = Field(min_length=1)  # e.g. locked out of a resume code
+
+
 class RegionContent(BaseModel):
     region: str
     crisis: CrisisContent
+    needs_human: NeedsHumanContent
 
 
 def region_file(region: str) -> Path:

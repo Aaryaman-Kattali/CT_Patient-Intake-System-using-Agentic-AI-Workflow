@@ -92,18 +92,21 @@ class IntakeService:
         self._today = today
 
     def _config(self) -> EngineConfig:
+        content = load_region_content(self._settings.region)
         return EngineConfig(
             today=self._today(),
             region=self._settings.region,
             max_field_attempts=self._settings.max_field_attempts,
-            crisis=load_region_content(self._settings.region).crisis,
+            crisis=content.crisis,
+            needs_human=content.needs_human,
+            synthetic=self._settings.synthetic_only,
         )
 
     def create(self) -> Created:
         token = secrets.token_urlsafe(32)
         snap = Snapshot(id=uuid4(), state=State.GREETING)
         self._repo.create(snap, hash_secret(token), (EventRecord(type="created"),))
-        return Created(intake_id=snap.id, token=token, view=render(snap))
+        return Created(intake_id=snap.id, token=token, view=self._render(snap))
 
     def verify_token(self, intake_id: UUID, token: str) -> bool:
         stored = self._repo.token_hash(intake_id)
@@ -130,9 +133,21 @@ class IntakeService:
             view = result.view or view
         return Created(intake_id=intake_id, token=token, view=view)
 
+    def resume_code_on_request(self, intake_id: UUID) -> str | None:
+        """The code, any time after the intake has started (the "Take a break" area).
+        None before it has started. Asking for it makes it work at once."""
+        snap = self._repo.load(intake_id)
+        if snap is None or snap.state is State.GREETING:
+            return None
+        code = self.resume_code(intake_id)
+        code_hash = lookup_hash(code, self._secret) or ""
+        event = EventRecord(type="resume_code_shown")
+        self._repo.store_resume_code_hash(intake_id, code_hash, (event,))
+        return code
+
     def review(self, intake_id: UUID) -> TurnView | None:
         snap = self._repo.load(intake_id)
-        return render(snap, with_review=True) if snap else None
+        return self._render(snap, with_review=True) if snap else None
 
     def resume_code(self, intake_id: UUID) -> str:
         return resume_code_for(intake_id, self._secret)
@@ -141,9 +156,17 @@ class IntakeService:
         snap = self._repo.load(intake_id)
         return self._render(snap) if snap else None
 
-    def _render(self, snap: Snapshot, notes: Notes | None = None) -> TurnView:
+    def _render(
+        self, snap: Snapshot, notes: Notes | None = None, *, with_review: bool = False
+    ) -> TurnView:
         code = self.resume_code(snap.id) if snap.state is State.PAUSED else None
-        return render(snap, notes, resume_code=code)
+        return render(
+            snap,
+            notes,
+            resume_code=code,
+            with_review=with_review,
+            synthetic=self._settings.synthetic_only,
+        )
 
     @property
     def _secret(self) -> bytes:

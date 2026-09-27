@@ -42,6 +42,7 @@ def test_unexpected_exception_returns_fixed_error_without_details(
         "code": "internal_error",
         "message": "Something did not work on our side. Your saved answers are safe.",
         "view": None,
+        "actions": [],
     }
     assert not [s for s in SECRETS if s in response.text]
 
@@ -70,4 +71,4 @@ def test_framework_errors_use_the_same_shape(
 ) -> None:
     response = api.client.request(method, path)
     assert response.status_code == status
-    assert response.json() == {"code": code, "message": MESSAGES[code], "view": None}  # type: ignore[index]
+    assert response.json() == {"code": code, "message": MESSAGES[code], "view": None, "actions": []}  # type: ignore[index]

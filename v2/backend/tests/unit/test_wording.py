@@ -75,6 +75,11 @@ SENTENCES = [
     *(t.NEEDED_BECAUSE_METHOD.format(choice=o.label) for o in METHOD_OPTIONS),
     load_region_content("US").crisis.heading,
     *load_region_content("US").crisis.lines,
+    *load_region_content("US").needs_human.with_contact,
+    *load_region_content("US").needs_human.without_contact,
+    t.DEMO_NO_CONTACT,
+    *t.RESUME_CODE_INFO,
+    *load_region_content("US").needs_human.no_form,
 ]
 
 COMPOSED_QUESTIONS = [

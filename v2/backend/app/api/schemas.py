@@ -11,7 +11,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.workflow import commands as c
-from app.workflow.view import TurnView
+from app.workflow.view import ActionView, TurnView
 
 
 class _Body(BaseModel):
@@ -82,3 +82,21 @@ class ErrorBody(BaseModel):
     code: ErrorCode
     message: str
     view: TurnView | None = None  # the current turn, where it helps (e.g. stale_turn)
+    actions: tuple[ActionView, ...] = ()  # e.g. "Talk to a person" when locked out
+
+
+class HelpView(BaseModel):
+    """Fixed text for "Talk to a person" when no form is open (e.g. locked out)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    info: tuple[str, ...]
+
+
+class ResumeCodeView(BaseModel):
+    """The resume code, on request from the "Take a break" area."""
+
+    model_config = ConfigDict(frozen=True)
+
+    resume_code: str
+    info: tuple[str, ...]

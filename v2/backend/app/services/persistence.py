@@ -268,6 +268,18 @@ class IntakeRepository:
             row = session.get(IntakeRow, intake_id)
             return row.token_hash if row else None
 
+    def store_resume_code_hash(
+        self, intake_id: UUID, code_hash: str, events: tuple[EventRecord, ...]
+    ) -> None:
+        """The code was shown on request: make sure it works now. Never changes a stored one."""
+        with Session(self._engine) as session, session.begin():
+            session.exec(
+                update(IntakeRow)
+                .where(IntakeRow.id == intake_id, IntakeRow.resume_code_hash.is_(None))  # type: ignore[union-attr,arg-type]
+                .values(resume_code_hash=code_hash)
+            )
+            self._append(session, intake_id, self._turn(session, intake_id), events)
+
     def replace_token_hash(self, intake_id: UUID, token_hash: str) -> None:
         """A resume code opened the intake on a new device: the old token stops working."""
         with Session(self._engine) as session, session.begin():
