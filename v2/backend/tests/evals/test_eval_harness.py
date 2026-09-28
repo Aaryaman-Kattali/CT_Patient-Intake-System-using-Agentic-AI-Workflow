@@ -166,3 +166,21 @@ def test_daily_counters_are_separate_per_api_project(tmp_path: Path) -> None:
 def test_quota_profile_is_a_plain_label() -> None:
     with pytest.raises(ValueError, match="eval_quota_profile"):
         Settings(_env_file=None, eval_quota_profile="AIza secret key!")
+
+
+class RefusedKey:
+    """An understander whose API key is refused (403), as the API reports it."""
+
+    def understand(self, message: str, context: object) -> object:
+        from app.workflow.understanding import AgentReply, LlmCallInfo
+
+        call = LlmCallInfo(model="m", latency_ms=1, status="error", error_class="ClientError:403")
+        return AgentReply(understanding=None, call=call)
+
+
+def test_a_refused_key_stops_the_whole_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(runner, "RUNS", tmp_path)
+    budget = Budget(tmp_path / "b.json", Limits(rpm=10**6, tpm=10**9, rpd=10**6))
+    out = runner.run("r", RefusedKey(), Settings(_env_file=None), budget)  # type: ignore[arg-type]
+    assert not out.exists() or out.read_text(encoding="utf-8") == ""  # no case recorded
+    assert budget.used_today() <= 1  # stopped at the first refusal, not after every case

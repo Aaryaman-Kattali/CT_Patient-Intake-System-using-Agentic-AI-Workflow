@@ -63,6 +63,14 @@ def texts_of(view: TurnView) -> list[str]:
     return [x for x in (view.acknowledgement, *view.info, q.text if q else None, value) if x]
 
 
+# The API refused the key or its project (not a passing error): stop the whole run.
+KEY_REFUSED = frozenset({"ClientError:401", "ClientError:403"})
+
+
+class KeyRefused(Exception):
+    pass
+
+
 class CaseRun:
     """One case, played turn by turn."""
 
@@ -276,6 +284,9 @@ class CaseRun:
             if result.status == "rejected" and result.reason in API_FAILURES:
                 self.api_failures += 1
                 self._log(how, field, command, kinds, result.view, calls, api_failure=True)
+                refused = next((c.error_class for c in calls if c.error_class in KEY_REFUSED), None)
+                if refused:  # the key or project is refused: no case can run, stop the run
+                    raise KeyRefused(refused)
                 if attempt < len(BACKOFF_S):
                     time.sleep(BACKOFF_S[attempt] * random.uniform(1.0, 1.5))  # noqa: S311
                     continue
@@ -432,6 +443,9 @@ def run(
         except DailyLimitReached as stop:
             log.warning("daily request limit reached, stopping cleanly: %s", stop)
             say(f"Stopped before {case.id}: {stop}. Run again tomorrow to resume.")
+            break
+        except KeyRefused as refused:  # nothing is saved for this case; it runs again later
+            say(f"Stopped at {case.id}: the API refused the key or project ({refused}).")
             break
         result["duration_s"] = round(time.monotonic() - started, 1)
         with results.open("a", encoding="utf-8") as f:
