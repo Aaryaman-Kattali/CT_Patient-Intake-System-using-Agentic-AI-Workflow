@@ -35,7 +35,7 @@ from typing import Any
 BACKEND = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND))
 
-from evals.budget import Budget, DailyLimitReached, Limits  # noqa: E402
+from evals.budget import Budget, DailyLimitReached, Limits, quota_file  # noqa: E402
 from evals.cases import Case, load_cases  # noqa: E402
 from evals.common import norm, say  # noqa: E402
 
@@ -344,6 +344,7 @@ def main() -> None:
     parser.add_argument("--run", required=True)
     parser.add_argument("--only", nargs="*")
     parser.add_argument("--per-category", type=int, default=1)
+    parser.add_argument("--quota-profile", help="the API project label (not the key)")
     args = parser.parse_args()
     folder = RUNS / args.run
     workdir = folder / "v1-cwd"
@@ -355,7 +356,8 @@ def main() -> None:
     sys.path.insert(0, str(args.v1_dir.resolve()))
     from agent.root_agent.agent import root_agent  # type: ignore[import-not-found]  # V1
 
-    budget = Budget(RUNS / "quota.json", Limits())
+    profile = args.quota_profile or _profile_from_v2_env()
+    budget = Budget(quota_file(RUNS, profile, "gemini-3.5-flash-lite"), Limits())
     meter = Meter(budget)
     meter.attach(root_agent)
     results = folder / "results.jsonl"
@@ -384,6 +386,15 @@ def main() -> None:
             f"{case.id}: {result['outcome']} ({result['duration_s']} s, "
             f"{budget.used_today()} requests today)"
         )
+
+
+def _profile_from_v2_env() -> str:
+    """EVAL_QUOTA_PROFILE from v2/backend/.env (a label), or "default"."""
+    for line in (BACKEND / ".env").read_text(encoding="utf-8").splitlines():
+        name, _, value = line.partition("=")
+        if name.strip() == "EVAL_QUOTA_PROFILE" and value.strip():
+            return value.strip().strip('"').strip("'")
+    return os.environ.get("EVAL_QUOTA_PROFILE", "default")
 
 
 def _key_from_v2_env() -> str:

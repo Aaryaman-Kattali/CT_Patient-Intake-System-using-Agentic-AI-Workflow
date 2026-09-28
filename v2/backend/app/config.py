@@ -40,6 +40,9 @@ class Settings(BaseSettings):
     # window is fixed (RESUME_WINDOW_S) because the lockout message names it.
     resume_max_failures_per_code: int = Field(default=5, ge=1)
     resume_max_failures_per_client: int = Field(default=10, ge=1)
+    # Eval only: a non-secret label for the API key's Google project, so each project keeps
+    # its own daily request count. Never the key itself.
+    eval_quota_profile: str = Field(default="default", pattern=r"^[a-z0-9_-]{1,32}$")
     region: str = Field(default="US", pattern=r"^[A-Z]{2}$")
     max_message_chars: int = Field(default=1000, ge=50, le=10_000)
     max_field_attempts: int = Field(default=3, ge=1, le=10)

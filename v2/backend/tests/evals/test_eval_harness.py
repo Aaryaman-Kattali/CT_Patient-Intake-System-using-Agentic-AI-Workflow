@@ -150,3 +150,19 @@ def test_gemma_limits_are_20_rpm_and_11k_tpm(tmp_path: Path) -> None:
     budget.after_turn(requests=2, tokens=5_500)  # tokens are hit first: 5 500 + 4 x 1 500 > 11K
     budget.before_turn()
     assert t.slept
+
+
+def test_daily_counters_are_separate_per_api_project(tmp_path: Path) -> None:
+    from evals.budget import quota_file
+
+    one = quota_file(tmp_path, "default", "gemini-3.5-flash-lite")
+    two = quota_file(tmp_path, "account2", "gemini-3.5-flash-lite")
+    assert one != two
+    Budget(one, Limits(), today=lambda: "d").after_turn(requests=300, tokens=0)
+    assert Budget(two, Limits(), today=lambda: "d").used_today() == 0  # a different project
+    assert "account2" in two.name  # a label, never a key
+
+
+def test_quota_profile_is_a_plain_label() -> None:
+    with pytest.raises(ValueError, match="eval_quota_profile"):
+        Settings(_env_file=None, eval_quota_profile="AIza secret key!")

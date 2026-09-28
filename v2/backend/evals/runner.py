@@ -15,7 +15,9 @@ import argparse
 import json
 import logging
 import random
+import subprocess
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -31,7 +33,7 @@ from app.workflow.metrics import repeated_questions
 from app.workflow.states import State
 from app.workflow.understanding import Understander
 from app.workflow.view import TurnView
-from evals.budget import MODEL_LIMITS, Budget, DailyLimitReached, Limits
+from evals.budget import MODEL_LIMITS, Budget, DailyLimitReached, Limits, quota_file
 from evals.cases import Case, Special, load_cases
 from evals.common import norm, say
 
@@ -441,10 +443,35 @@ def run(
     return results
 
 
-def _quota_file(settings: Settings) -> Path:
-    if settings.gemini_model == "gemini-3.5-flash-lite":
-        return RUNS / "quota.json"
-    return RUNS / f"quota-{settings.gemini_model}.json"
+def _write_meta(folder: Path, settings: Settings, profile: str, note: str | None) -> None:
+    """Run metadata: labels only. Never the API key."""
+    meta = folder / "run_meta.json"
+    if meta.exists():
+        return  # a resumed run keeps its first metadata
+    commit = subprocess.run(
+        ["git", "-c", "safe.directory=*", "rev-parse", "--short", "HEAD"],  # noqa: S607
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd=Path(__file__).parent,
+    ).stdout.strip()
+    dataset = load_cases()
+    meta.write_text(
+        json.dumps(
+            {
+                "model": settings.gemini_model,
+                "quota_profile": profile,
+                "git_commit": commit,
+                "cases": len(dataset),
+                "started_at": datetime.now(UTC).isoformat(timespec="seconds"),
+                "llm_deadline_s": settings.llm_deadline_s,
+                "llm_hedge_after_s": settings.llm_hedge_after_s,
+                "note": note,
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
 
 
 def main() -> None:
@@ -455,6 +482,8 @@ def main() -> None:
     parser.add_argument("--limit", type=int)
     parser.add_argument("--dataset", type=Path, help="default: the 61 scripted cases")
     parser.add_argument("--model", help="override GEMINI_MODEL (e.g. gemma-4-26b-a4b-it)")
+    parser.add_argument("--quota-profile", help="override EVAL_QUOTA_PROFILE (a label)")
+    parser.add_argument("--note", help="free text for run_meta.json (no secrets)")
     args = parser.parse_args()
     if args.dry_run:
         from tests.e2e_server import RuleUnderstander
@@ -468,7 +497,13 @@ def main() -> None:
         limits = MODEL_LIMITS[settings.gemini_model]
     # Live runs share one daily count per model (V2 and the V1 baseline use the same key
     # and model); another model (Gemma) has its own quota and its own count.
-    quota = RUNS / args.run / "budget.json" if args.dry_run else _quota_file(settings)
+    profile = args.quota_profile or settings.eval_quota_profile
+    quota = (
+        RUNS / args.run / "budget.json"
+        if args.dry_run
+        else quota_file(RUNS, profile, settings.gemini_model)
+    )
+    _write_meta(RUNS / args.run, settings, profile, args.note)
     budget = Budget(quota, limits)
     path = run(
         args.run, understander, settings, budget, set(args.only or ()), args.limit, args.dataset

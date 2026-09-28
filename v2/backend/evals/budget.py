@@ -28,6 +28,11 @@ WORST_TOKENS_PER_REQUEST = 3_000  # about 1 200 in practice; generous on purpose
 QUOTA_DAY = ZoneInfo("America/Los_Angeles")  # Gemini daily quotas reset at midnight Pacific
 
 
+def quota_file(runs: Path, profile: str, model: str) -> Path:
+    """One daily counter per API project (a label, never the key) and model."""
+    return runs / f"quota-{profile}-{model}.json"
+
+
 class DailyLimitReached(Exception):
     """Stop cleanly: the next turn could pass today's request limit."""
 
