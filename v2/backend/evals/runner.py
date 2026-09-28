@@ -445,6 +445,7 @@ def run(
 
 def _write_meta(folder: Path, settings: Settings, profile: str, note: str | None) -> None:
     """Run metadata: labels only. Never the API key."""
+    folder.mkdir(parents=True, exist_ok=True)
     meta = folder / "run_meta.json"
     if meta.exists():
         return  # a resumed run keeps its first metadata
