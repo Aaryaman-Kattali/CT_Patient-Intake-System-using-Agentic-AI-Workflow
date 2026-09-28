@@ -36,6 +36,7 @@ SAMPLE = {
     "total": "12",
     "code": "ABCD 1234",
     "name": "Alex",
+    "number": "4",
 }
 
 METHOD_OPTIONS = get_field("preferred_contact_method").options
@@ -51,8 +52,6 @@ SENTENCES = [
     t.SKIPPED,
     t.UPDATED,
     t.UNDONE,
-    t.CONFLICT_EARLIER,
-    t.CONFLICT_NOW,
     *t.START,
     *t.PAUSED,
     t.WELCOME_BACK,
@@ -79,18 +78,25 @@ SENTENCES = [
     *load_region_content("US").needs_human.without_contact,
     t.DEMO_NO_CONTACT,
     *t.RESUME_CODE_INFO,
+    *t.UI_SENTENCES.values(),
+    *t.SUBMITTED,
     *load_region_content("US").needs_human.no_form,
 ]
 
 COMPOSED_QUESTIONS = [
-    *(t.CONFIRM_VALUE.format(label=f.short_label.capitalize(), value="Sample") for f in FIELDS),
-    " ".join([t.CONFLICT_EARLIER, t.CONFLICT_NOW, t.CONFLICT_QUESTION]).format(**SAMPLE),
+    *(
+        template.format(label=label)
+        for f in FIELDS
+        for label in {f.label_self, f.label_other}
+        for template in (t.CONFIRM_VALUE, t.CONFIRM_CHANGE, t.CONFLICT)
+    ),
     t.DATE_CHOICE,
 ]
 
 LABELS = [
     *(o.label for f in FIELDS for o in f.options),
     *t.BUTTONS.values(),
+    *t.UI_LABELS.values(),
     t.REVIEW_STILL_NEEDED,
     t.REVIEW_NOT_KNOWN,
 ]

@@ -100,3 +100,13 @@ class ResumeCodeView(BaseModel):
 
     resume_code: str
     info: tuple[str, ...]
+
+
+class UiText(BaseModel):
+    """Every fixed word the frontend shows besides questions and answers (principle P3)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    buttons: dict[str, str]
+    labels: dict[str, str]
+    sentences: dict[str, str]  # may contain {placeholders}, filled in by the frontend

@@ -181,7 +181,11 @@ def test_email_denied_in_every_state_except_submitted(api: Api, state: str) -> N
 def test_email_allowed_once_submitted(api: Api) -> None:
     tab = _submitted(api, FI_SELF_BOOK)
     view = _email(tab)
-    assert view["info"] == ["We sent an email to say we have your form."]
+    assert view["info"] == [
+        "Thank you. We have your form.",
+        "You can close this page now.",
+        "We sent an email to say we have your form.",
+    ]
     assert len(api.provider.sent) == 1
     assert "Alex" not in api.provider.sent[0].body  # no answers in the email, not even a name
 

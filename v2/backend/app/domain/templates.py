@@ -35,11 +35,12 @@ UPDATED = "Updated: {short_label} is {value}."
 UNDONE = "Changed back: {short_label} is {value}."
 
 # --- Single questions built from fixed parts. Exactly one "?" each.
-CONFIRM_VALUE = "{label}: {value}. Is that right?"
+# The question is plain text; the value is shown on its own, below it (QuestionView.value).
+CONFIRM_VALUE = "Is this {label}?"
+CONFIRM_CHANGE = "Do you want to change {label} to this?"
 DATE_CHOICE = "Which date do you mean?"
-CONFLICT_EARLIER = "Earlier you said {old}."
-CONFLICT_NOW = "Now you said {new}."
-CONFLICT_QUESTION = "Which one is correct?"
+# Both values are the answer buttons.
+CONFLICT = "You gave two answers for {label}. Which one is correct?"
 
 # --- Start, pause, resume.
 START = (
@@ -132,3 +133,45 @@ BUTTONS: MappingProxyType[str, str] = MappingProxyType(
         "submit": "Send my form",
     }
 )
+
+
+# --- Text the frontend shows around the questions (served by GET /ui/text). The frontend
+# writes no wording of its own: every word a user sees comes from this module or the registry.
+UI_LABELS: MappingProxyType[str, str] = MappingProxyType(
+    {
+        "send": "Send",
+        "answer_box": "Your answer",
+        "text_size": "Text size",
+        "text_bigger": "Bigger text",
+        "text_smaller": "Smaller text",
+        "your_code": "Your code",
+        "copy_code": "Copy code",
+        "show_code": "Show my code",
+        "have_code": "I have a code",
+        "enter_code": "Type your code",
+        "review_title": "Check your answers",
+        "your_answers": "Your answers",
+        "change": "Change",
+        "email_me": "Email me a confirmation",
+        "staff_view": "Staff view (demo)",
+        "new_form": "Start a new form",
+        "back": "Back",
+        "progress": "Your progress",
+        "done": "Done",
+        "still_needed": REVIEW_STILL_NEEDED,
+    }
+)
+UI_SENTENCES: MappingProxyType[str, str] = MappingProxyType(
+    {
+        "reading": "Reading your answer…",
+        "example": "Example: {example}",
+        "progress": "Question {number} of about {total}",
+        "code_copied": "The code is copied.",
+        "no_connection": "The form cannot be reached right now. Please try again in a moment.",
+        "resume_intro": "Type the code you wrote down. Then you can go on with your form.",
+        # Staff page only (/staff/<intake id>). The patient pages never link to it.
+        "staff_open_here": "Open this page in the browser where the form was filled in.",
+    }
+)
+# After the form is sent (the engine adds no text of its own on submit).
+SUBMITTED = ("Thank you. We have your form.", "You can close this page now.")

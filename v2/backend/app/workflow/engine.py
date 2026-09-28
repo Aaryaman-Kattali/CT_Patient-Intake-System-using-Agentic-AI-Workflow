@@ -124,7 +124,9 @@ def derive_state(snap: Snapshot) -> State:
     return State.COLLECTING
 
 
-_CONFIRM_KINDS = frozenset({PendingKind.CONFIRM_EXTRA, PendingKind.CONFIRM_VALUE})
+_CONFIRM_KINDS = frozenset(
+    {PendingKind.CONFIRM_EXTRA, PendingKind.CONFIRM_VALUE, PendingKind.CONFIRM_CHANGE}
+)
 
 
 def needs_understanding(snap: Snapshot, text: str) -> bool:
@@ -215,6 +217,14 @@ class _Turn:
         kind = "field_corrected" if edit else _accepted_event(status)
         self.set_field(fld.id, new, kind)
         self.notes.acknowledgement = t.SAVED
+        if edit and previous is not None and previous.value != new.value:
+            self.undo = UndoRecord(
+                field_id=fld.id, previous=previous, valid_for_turn=self.start.turn + 1
+            )
+            self.notes.acknowledgement = t.UPDATED.format(
+                short_label=fld.short_label, value=parsed.display
+            )
+            self.notes.actions.append("undo")
 
     def mark(self, fld: FieldDef, status: FieldStatus, event: str, ack: str) -> None:
         self.set_field(fld.id, FieldState(status=status), event)
@@ -331,6 +341,8 @@ def _not_sure(turn: _Turn, fld: FieldDef) -> Result:
 
 def _resolve_queue(turn: _Turn, item: PendingItem, choice: str) -> Result:
     fld = get_field(item.field_id)
+    if item.kind is PendingKind.CONFIRM_CHANGE:
+        return _resolve_change(turn, item, fld, choice)
     if item.kind in (PendingKind.CONFIRM_EXTRA, PendingKind.CONFIRM_VALUE):
         if choice not in ("yes", "no"):
             return _reject("choose_yes_or_no", t.RETRY["choose_option"])
@@ -348,6 +360,28 @@ def _resolve_queue(turn: _Turn, item: PendingItem, choice: str) -> Result:
         turn.accept(fld, Parsed(picked.value, picked.display), item.source, FieldStatus.CONFIRMED)
         return turn.finish(Trigger.ANSWER)
     return _resolve_conflict(turn, item, fld, choice)
+
+
+def _resolve_change(turn: _Turn, item: PendingItem, fld: FieldDef, choice: str) -> Result:
+    if choice not in ("yes", "no"):
+        return _reject("choose_yes_or_no", t.RETRY["choose_option"])
+    turn.queue.pop(0)
+    if choice == "no":  # keep the saved value
+        turn.event("field_rejected", fld.id, kind=item.kind.value)
+        return turn.finish(Trigger.ANSWER)
+    current = turn.answers.get(fld.id)
+    new = FieldState(
+        status=FieldStatus.CONFIRMED,
+        value=item.value,
+        display=item.display,
+        extra_text=item.extra_text,
+        source=item.source,
+    )
+    turn.set_field(fld.id, new, "field_corrected", previous=current.value if current else None)
+    turn.notes.acknowledgement = t.UPDATED.format(
+        short_label=fld.short_label, value=item.display or ""
+    )
+    return turn.finish(Trigger.ANSWER)
 
 
 def _resolve_conflict(turn: _Turn, item: PendingItem, fld: FieldDef, choice: str) -> Result:
@@ -641,25 +675,14 @@ def _extra_for_answered(
     if decision.verdict is Verdict.DENY:
         turn.event("proposal_dropped", fld.id, reason=decision.reason)
         return False
-    if decision.allowed and isinstance(outcome, Parsed):  # Q7: quoted correction, with Undo
-        new = FieldState(
-            status=FieldStatus.ACCEPTED,
-            value=parsed.value,
-            display=parsed.display,
-            extra_text=parsed.extra_text,
-            source=Source.EXPLICIT,
-        )
-        turn.set_field(fld.id, new, "field_corrected", previous=current.value)
-        turn.undo = UndoRecord(
-            field_id=fld.id, previous=current, valid_for_turn=turn.start.turn + 1
-        )
-        turn.notes.acknowledgement = t.UPDATED.format(
-            short_label=fld.short_label, value=parsed.display
-        )
-        turn.notes.actions.append("undo")
+    old = current.display or current.value
+    if decision.reason == "correction_needs_yes":  # Q7: yes/no with the full new value
+        item = _pending(PendingKind.CONFIRM_CHANGE, fld, parsed, source)
+        turn.queue.append(item.model_copy(update={"old_display": old}))
+        turn.event("change_proposed", fld.id, source=source.value)
         return True
     item = _pending(PendingKind.CONFLICT, fld, parsed, source)
-    turn.queue.append(item.model_copy(update={"old_display": current.display or current.value}))
+    turn.queue.append(item.model_copy(update={"old_display": old}))
     turn.event("conflict_detected", fld.id, source=source.value)
     return True
 
@@ -723,7 +746,9 @@ def _needs_human(turn: _Turn, *, crisis: bool) -> Result:
     turn.notes.info += people.with_contact if reachable else people.without_contact
     if turn.config.synthetic:
         turn.notes.info.append(t.DEMO_NO_CONTACT)
-    turn.notes.info += list(t.NEEDS_HUMAN if reachable else t.NEEDS_HUMAN_NO_CONTACT)
+    tail = t.NEEDS_HUMAN if reachable else t.NEEDS_HUMAN_NO_CONTACT
+    shown = " ".join(turn.notes.info)
+    turn.notes.info += [line for line in tail if line not in shown]  # say each thing once
     turn.notes.actions.append("continue_alone")
     turn.event("needs_human", reason="crisis" if crisis else "requested")
     return turn.finish(Trigger.NEEDS_HUMAN, State.NEEDS_HUMAN)

@@ -123,3 +123,13 @@ def test_crisis_response_shows_the_demo_line(tmp_path: Path) -> None:
 def test_email_body_shows_the_demo_line() -> None:
     _assert_demo_line_follows_promises(body_lines(synthetic=True))
     assert t.DEMO_NO_CONTACT not in body_lines(synthetic=False)
+
+
+def test_crisis_response_says_each_thing_once(tmp_path: Path) -> None:
+    d = Driver(make_service(tmp_path / "intake.db"))
+    d.send(c.Start())
+    d.choose("family_inquiry")
+    d.choose("me")
+    info = list(d.text("I want to kill myself").info)
+    assert sum("Your answers are saved" in line for line in info) == 1
+    assert info[-1] == "You can keep going on your own and add one."

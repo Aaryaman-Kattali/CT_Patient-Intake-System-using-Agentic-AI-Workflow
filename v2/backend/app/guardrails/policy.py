@@ -108,7 +108,9 @@ def _change(
     if state is State.SUBMITTED or fld is None or not is_applicable(fld, answers):
         return _deny("field_not_writable")
     if quoted and source is Source.EXPLICIT:
-        return _allow("quoted_correction")  # Q7: saved directly, with Undo
+        # Q7 (updated after eval run 1): a correction to a field that is not being asked
+        # is shown with its full new value and saved only after a yes.
+        return _confirm("correction_needs_yes")
     return _confirm("change_needs_conflict_question")
 
 

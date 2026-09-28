@@ -15,7 +15,7 @@ from app.domain.requirements import (
     review_items,
 )
 from app.domain.types import InputType
-from app.domain.wording import question_text, section_name
+from app.domain.wording import autocomplete_hint, field_label, question_text, section_name
 from app.workflow.engine import FieldQuestion, Notes, QueueQuestion, current_question
 from app.workflow.snapshot import PendingKind, Snapshot
 from app.workflow.states import COLLECTING_STATES, State
@@ -41,6 +41,8 @@ class QuestionView(_View):
     why: str
     can_skip: bool
     can_defer: bool
+    value: str | None = None  # the value to check, shown on its own below the question
+    autocomplete: str = "off"  # browser autofill hint; "off" unless about the person typing
 
 
 class ActionView(_View):
@@ -116,6 +118,7 @@ def _question(snap: Snapshot, synthetic: bool) -> QuestionView | None:
             why=t.with_demo_notice(fld.why, synthetic),
             can_skip=not needed,
             can_defer=needed and fld.id != "intake_type",
+            autocomplete=autocomplete_hint(fld, snap.answers),
         )
     return _queue_question(snap, q, synthetic)
 
@@ -123,14 +126,9 @@ def _question(snap: Snapshot, synthetic: bool) -> QuestionView | None:
 def _queue_question(snap: Snapshot, q: QueueQuestion, synthetic: bool) -> QuestionView:
     item, fld = q.item, get_field(q.item.field_id)
     options: tuple[OptionView, ...]
+    value: str | None = None
     if item.kind is PendingKind.CONFLICT:
-        text = " ".join(
-            [
-                t.CONFLICT_EARLIER.format(old=item.old_display),
-                t.CONFLICT_NOW.format(new=item.display),
-                t.CONFLICT_QUESTION,
-            ]
-        )
+        text = t.CONFLICT.format(label=field_label(fld, snap.answers))
         options = (
             OptionView(id="old", label=item.old_display or ""),
             OptionView(id="new", label=item.display or ""),
@@ -141,8 +139,9 @@ def _queue_question(snap: Snapshot, q: QueueQuestion, synthetic: bool) -> Questi
         text = t.DATE_CHOICE
         options = tuple(OptionView(id=ch.value, label=ch.display) for ch in item.choices)
     else:
-        label = fld.short_label[:1].upper() + fld.short_label[1:]
-        text = t.CONFIRM_VALUE.format(label=label, value=item.display)
+        template = t.CONFIRM_CHANGE if item.kind is PendingKind.CONFIRM_CHANGE else t.CONFIRM_VALUE
+        text = template.format(label=field_label(fld, snap.answers))
+        value = item.display
         options = (
             OptionView(id="yes", label=t.BUTTONS["yes"]),
             OptionView(id="no", label=t.BUTTONS["no"]),
@@ -157,6 +156,7 @@ def _queue_question(snap: Snapshot, q: QueueQuestion, synthetic: bool) -> Questi
         why=t.with_demo_notice(fld.why, synthetic),
         can_skip=False,
         can_defer=False,
+        value=value,
     )
 
 
@@ -231,6 +231,8 @@ def render(
     info = list(notes.info)
     if snap.state is State.GREETING and not info:
         info = [line.format(total=ABOUT_TOTAL) for line in t.START]
+    if snap.state is State.SUBMITTED:
+        info = [*t.SUBMITTED, *info]
     return TurnView(
         state=snap.state,
         turn=snap.turn,

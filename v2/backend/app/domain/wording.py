@@ -36,3 +36,23 @@ def field_label(field: FieldDef, answers: Answers) -> str:
 def section_name(section: str, answers: Answers) -> str:
     self_name, other_name = SECTION_NAMES[section]
     return self_name if respondent_is_patient(answers) else other_name
+
+
+# Browser autofill hints (WCAG 1.3.5). Only for information about the person typing:
+# autofill must never put the respondent's own details into a field about someone else.
+RESPONDENT_AUTOCOMPLETE = {
+    "respondent_name": "name",
+    "phone": "tel",
+    "email": "email",
+    "address": "street-address",
+}
+PATIENT_AUTOCOMPLETE = {"full_name": "name", "date_of_birth": "bday"}
+
+
+def autocomplete_hint(field: FieldDef, answers: Answers) -> str:
+    """The HTML autocomplete token for this question, or "off"."""
+    if field.id in RESPONDENT_AUTOCOMPLETE and is_about_respondent(field, answers):
+        return RESPONDENT_AUTOCOMPLETE[field.id]
+    if field.id in PATIENT_AUTOCOMPLETE and respondent_is_patient(answers):
+        return PATIENT_AUTOCOMPLETE[field.id]
+    return "off"

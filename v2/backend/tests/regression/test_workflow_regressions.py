@@ -111,16 +111,11 @@ def test_second_tab_with_old_turn_is_rejected_and_can_refresh(tmp_path: Path) ->
 
 
 def _corrected(tmp_path: Path) -> Driver:
+    """A correction to the question being asked (re-opened from review): saved, with Undo."""
     d = Driver(make_service(tmp_path / "intake.db"))
-    d.send(c.Start())
-    d.choose("family_inquiry")
-    d.choose("me")
-    d.text("Alex Rivera")
-    d.text("May 4, 2004")
-    d.text(
-        "sorry, it is May 14 2004",
-        understood(ReplyKind.CORRECTION, ("date_of_birth", "May 14 2004")),
-    )
+    d.run(FI_SELF_BOOK)
+    d.send(c.EditField(field_id="date_of_birth"))
+    d.text("May 14 2004")
     return d
 
 
@@ -134,7 +129,7 @@ def test_undo_restores_previous_value(tmp_path: Path) -> None:
 
 def test_undo_rejected_after_another_turn(tmp_path: Path) -> None:
     d = _corrected(tmp_path)
-    d.choose("email")  # a different reply first
+    d.send(c.EditField(field_id="phone"))  # a different action first
     view = d.send(c.Undo(), expect="rejected")
     assert "undo" not in [a.id for a in view.actions]
     snap = d.service._repo.load(d.id)
@@ -149,8 +144,12 @@ def test_undo_without_correction_is_rejected(tmp_path: Path) -> None:
 
 
 def test_correction_requires_quoted_value(tmp_path: Path) -> None:
-    d = _corrected(tmp_path)
-    d.send(c.Undo())
+    d = Driver(make_service(tmp_path / "intake.db"))
+    d.send(c.Start())
+    d.choose("family_inquiry")
+    d.choose("me")
+    d.text("Alex Rivera")
+    d.text("May 4, 2004")  # now asking how to contact you
     u = understood(ReplyKind.CORRECTION, ("date_of_birth", "June 4 2004", "inferred"))
     view = d.text("maybe June 4 2004", u)
     assert view.question is not None
@@ -417,3 +416,17 @@ def test_paused_only_accepts_resume(tmp_path: Path) -> None:
     for command in (c.Choose(option_id="family_inquiry"), c.Skip(), c.Submit(), c.Text(text="hi")):
         d.send(command, expect="rejected")
     assert d.send(c.Resume()).state is State.CHOOSE_INTAKE_TYPE
+
+
+def test_edit_intake_type_from_review_returns_to_review(tmp_path: Path) -> None:
+    """Found by the Phase 7 frontend: this raised IllegalTransition (a 500 in the API)."""
+    d = Driver(make_service(tmp_path / "intake.db"))
+    d.run(FI_SELF_BOOK)
+    d.send(c.EditField(field_id="intake_type"))
+    view = d.choose("family_inquiry")  # the same answer again
+    assert view.state is State.REVIEW
+    d.send(c.EditField(field_id="intake_type"))
+    view = d.choose("provider_referral")  # a different path: back to review, new fields listed
+    assert view.state is State.REVIEW
+    assert view.review is not None
+    assert "referral_provider_name" in [m.field_id for m in view.review.missing]

@@ -98,8 +98,11 @@ States roughly how many questions there are ("about 12"), that the user can stop
 
 ### 3.5 Corrections and conflicts
 
-- **Conflict** (a new value for an already-saved field, without the user saying it is a correction): "Earlier you said May 4, 2004. Now you said June 4, 2004. Which one is correct?" Both values are shown as buttons, plus "Neither".
-- **Explicit correction** ("sorry, my birthday is May 14"): saved directly **only if** the reply kind is CORRECTION **and** the new value is `explicit` and quoted from the user's message (`raw_text` check, §6.3). The next message starts with the full new value, "Updated: date of birth is May 14, 2004.", and shows an **Undo** button next to it, followed by the next question. Undo restores the previous value and status (`correction_undone` event). It is offered only on the turn right after the correction. Inferred or unclear changes always go through the conflict question.
+- **Questions that check a value** are plain text, and the value is shown on its own, below the question (`question.value`): "Is this your email address?" with the address in a box underneath. So the question itself stays short and at grade 6 or lower whatever the value is.
+- **Conflict** (a new value for an already-saved field, without the user saying it is a correction): "You gave two answers for your date of birth. Which one is correct?" Both values are the answer buttons, plus "Neither" and "I'm not sure".
+- **Correction to a field that is not being asked** (for example, while answering the email question: "sorry, my birthday is May 14"): **never saved directly** (updated after eval run 1). The user sees "Do you want to change your date of birth to this?" with the full new value below it, and answers yes or no. Yes saves it (`field_corrected`, with the previous value in the event); no keeps the saved value. Only a CORRECTION whose new value is `explicit` and quoted from the message (`raw_text` check, §6.3) gets this question; inferred or unclear changes go through the conflict question.
+- **Correction to the field being asked** (a field re-opened from review): saved directly, with "Updated: date of birth is May 14, 2004." and an **Undo** button, offered only on the next turn. Undo restores the previous value and status (`correction_undone` event).
+- *Why this changed:* in eval run 1, a staff persona typed "DOB 2026-05-22" while answering the referral date. The model read it, reasonably, as a correction, and the old rule saved it over the date of birth without a question. A correction to a field the user is not looking at now always gets a yes/no with the full value.
 - The wording never suggests fault.
 
 ### 3.6 WCAG 2.2 AA (web)
@@ -117,6 +120,19 @@ Particular attention to:
 - Calm visual design: neutral palette, no red for "errors" (a neutral note with an icon and text instead), generous spacing, one column.
 
 ---
+
+### 3.7 Frontend (Phase 7)
+
+- React + TypeScript + Vite in `v2/frontend`. API types are generated from `/openapi.json` (`npm run gen:api`); CI fails if they are out of date. No API type is hand-written.
+- **No wording in the frontend.** Labels and interface sentences come from `GET /ui/text` (checked by the backend wording tests), questions from each turn. The only exception is one offline message, identical to the backend's, for when the API cannot be reached at all.
+- One question per screen, as the page's only `h1`. On each new turn, focus moves to it and the acknowledgement, question and any text are announced in a polite live region. A refused turn (same turn number) keeps focus where it was and announces why.
+- "Reading your answer…" appears in a status region only after 1 s of waiting. There is no motion at all (no spinners, typing dots, transitions or animations), whatever `prefers-reduced-motion` says.
+- Fixed places: "Why are you asking this?" directly under the question; a bar under every question screen with "Skip"/"Answer later" on the left and "Take a break" and "Show my code" (the code on request) on the right. "I'm not sure" is always the last option button.
+- Nothing changes on screen until the user acts. A double click sends one request.
+- The intake token is kept in `localStorage`, so closing the tab and coming back resumes on the same device. Text size (five steps) is remembered on the device. Targets are at least 48 px; one column on phones.
+- **Autofill (WCAG 1.3.5).** Each question carries `autocomplete`, set by the backend from who the field is about: `respondent_name` → `name`; Family Inquiry phone / email / address (always the respondent) → `tel` / `email` / `street-address`; `full_name` → `name` and `date_of_birth` → `bday` only when the form is for the person typing (relationship = me); everything else, including every Provider Referral field and any field about someone else, → `off`. Autofill must never put the respondent's own details into a field about someone else.
+- **Staff view (demo)** is a separate page, `/staff/<intake id>`, labelled "Staff view (demo)" in a solid band. It shows the staff summary and the benefit demo. The patient's pages never link to it (checked on every screen by the e2e tests); the submitted screen has only patient-facing text. There is no staff login in the demo: the page uses the intake token saved in that browser.
+- Tests: component tests (Vitest, Testing Library) and Playwright end-to-end tests against the real backend with a rule-based fake understander (`tests/e2e_server.py`, no Gemini). axe (WCAG 2.2 A/AA) runs on every screen type, and a keyboard-only walkthrough completes a full Family Inquiry.
 
 ## 4. Architecture
 
@@ -425,7 +441,8 @@ For each proposal:
 | explicit, other field, valid, field empty | queue a yes/no confirmation (P5) |
 | inferred (any field) | queue a yes/no confirmation |
 | any, field already has a different value, kind ≠ CORRECTION | queue a conflict question |
-| explicit, kind = CORRECTION, `raw_text` quoted from message, valid | save the new value, record a `field_corrected` event, show "Updated: <label> is <full value>." + Undo |
+| explicit, kind = CORRECTION, `raw_text` quoted from message, valid, **another field** | queue a yes/no with the full new value ("Do you want to change <label> to this?"); yes saves it (`field_corrected`) |
+| the **pending** field, already answered (re-opened from review), valid | save the new value (`field_corrected`), show "Updated: <label> is <full value>." + Undo |
 | inferred, or kind ≠ CORRECTION, field already has a value | conflict question (never a silent overwrite) |
 | ambiguous date | queue a two-button date choice |
 
@@ -482,6 +499,7 @@ Compare this single understanding agent against an ADK multi-agent variant (for 
 | GREETING | `start` | – | CHOOSE_INTAKE_TYPE |
 | CHOOSE_INTAKE_TYPE | `field_accepted(intake_type)` | queue empty | COLLECTING |
 | CHOOSE_INTAKE_TYPE | `field_accepted(intake_type)` | queue non-empty | CONFIRMING_EXTRA |
+| CHOOSE_INTAKE_TYPE | `field_accepted(intake_type)` | queue empty ∧ `return_to_review` (an edit from review) | REVIEW |
 | COLLECTING | `field_accepted` / `field_skipped` / `field_deferred` | queue empty, fields remain | COLLECTING |
 | COLLECTING | `extras_queued` | – | CONFIRMING_EXTRA |
 | COLLECTING | `conflict_detected` | – | RESOLVING_CONFLICT |
@@ -563,6 +581,7 @@ Every state-changing request carries the `turn` the client last saw (§8). Reque
 | `POST /intakes/{id}/resume` | PAUSED → where they were; NEEDS_HUMAN → "Continue on my own" | `Turn` | 404, 409 |
 | `POST /intakes/resume` | `{resume_code}` from a new device (no token) | `SessionView` with a **new** token | 400 `resume_failed`, 429 `too_many_attempts` (with a "Talk to a person" action) |
 | `POST /intakes/{id}/resume-code` | The resume code on request ("Take a break" area), any time after starting | `ResumeCodeView {resume_code, info}` | 404, 409 before starting |
+| `GET /ui/text` | Every fixed word the frontend shows besides questions and answers (button labels, interface labels, sentences such as "Reading your answer…") | `UiText {buttons, labels, sentences}` | – |
 | `GET /help/person` | "Talk to a person" text when no form is open (e.g. locked out) | `HelpView {info}` | – |
 | `GET /intakes/{id}/review` | All answers (with their section) plus what is missing, in any state | `Turn` with `review` | 404 |
 | `POST /intakes/{id}/review/edit` | `{turn, field_id}` → pins that question | `Turn` | 404, 409 |
@@ -601,7 +620,8 @@ There is **no** SOAP endpoint (D1). The conversational endpoints answer only wit
     "options": [],
     "why": "We use this to find your records.",
     "can_skip": false,
-    "can_defer": true
+    "can_defer": true,
+    "autocomplete": "bday"
   },
   "actions": [{"id": "take_a_break", "label": "Take a break"}],
   "progress": { "answered": 3, "about_total": 12, "exact": true,
@@ -773,6 +793,7 @@ Other safety tests (in `tests/safety`):
 - `test_crisis_keywords_bypass_llm`
 - `test_llm_parse_failure_changes_nothing`
 - `test_illegal_transitions_raise` (enumerates all pairs)
+- `test_every_offered_action_works_from_every_reachable_state` (tests/workflow; property-based: random paths through the engine; at every step every action the Turn offers, including option buttons, typed answers with extras, Skip and every review button, must be applied without error and never refused silently)
 - `test_side_effects_only_in_submitted`
 
 ---
@@ -886,7 +907,7 @@ I renumbered to match your order: you listed six implementation steps under "Pha
 | Q4 | `preferred_name` (optional; once given, used in greetings) and `gender` (optional, inclusive options plus "Prefer not to say") are included. |
 | Q5 | The owner reviews the §5.3 wording before Phase 3 and sends edits. §5.3 is a draft until then. |
 | Q6 | The staff summary is deterministic. |
-| Q7 | Direct save with "Updated: …" + Undo only when kind = CORRECTION and the new value is quoted from the message. Everything else goes through the conflict question. |
+| Q7 | **Updated after eval run 1:** a correction to a field that is **not** being asked is never saved directly: the user gets a yes/no with the full new value (kind = CORRECTION, explicit, quoted), or the conflict question (anything else). A correction to the field being asked (re-opened from review) is saved directly with "Updated: …" + Undo. *Original:* direct save + Undo whenever kind = CORRECTION and the value was quoted. |
 
 Additional regression tests from these decisions:
 - `test_correction_requires_quoted_value`

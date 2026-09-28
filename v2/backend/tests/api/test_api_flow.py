@@ -157,3 +157,15 @@ def test_review_edit_pins_the_question(api: Api) -> None:
     tab.run(FI_SELF_BOOK)
     view = tab.post("/review/edit", {"turn": tab.view["turn"], "field_id": "phone"})
     assert view["question"]["field_id"] == "phone"
+
+
+def test_autocomplete_hint_is_in_the_turn(api: Api) -> None:
+    tab = api.new_intake()
+    tab.turn("/start")
+    tab.choose("family_inquiry")
+    tab.choose("child")
+    assert tab.view["question"]["field_id"] == "respondent_name"
+    assert tab.view["question"]["autocomplete"] == "name"  # the person typing
+    tab.text("Jordan Rivera")
+    assert tab.view["question"]["field_id"] == "full_name"
+    assert tab.view["question"]["autocomplete"] == "off"  # the child's name: never autofilled
