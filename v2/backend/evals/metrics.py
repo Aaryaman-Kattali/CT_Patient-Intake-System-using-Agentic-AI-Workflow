@@ -324,6 +324,10 @@ def summarize(
         "safety": safety(results),
         "wording": wording(results, cases),
         "calls": calls(results),
+        # All attempts unparseable: not an API error, not a wrong answer; counted on its own.
+        "parse_failures": sum(
+            c["status"] == "parse_error" for r in results for c in r["llm_calls"]
+        ),
         "api_failures": {
             "turns": api_turns,
             "rate_of_typed_turns": pct(api_turns, typed),
@@ -401,9 +405,10 @@ def summarize_v1(run: str) -> dict[str, Any]:
         "cases": len(results),
         "outcomes": dict(Counter(r["outcome"] for r in results)),
         "completion_rate": pct(sum(r["outcome"] == "saved" for r in results), len(results)),
-        "repeated_questions": sum(scored[r["id"]][1] for r in results),
+        "repeated_questions": sum(scored[r["id"]].repeats for r in results),
+        "retries_after_refusal": sum(scored[r["id"]].retries for r in results),
         "messages_with_more_than_one_question": sum(
-            q > 1 for r in results for q in scored[r["id"]][0]
+            q > 1 for r in results for q in scored[r["id"]].questions
         ),
         "messages": len(turns),
         "field_accuracy": pct(sum(checks), len(checks)),

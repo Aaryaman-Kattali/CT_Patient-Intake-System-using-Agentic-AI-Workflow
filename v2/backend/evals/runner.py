@@ -31,7 +31,7 @@ from app.workflow.metrics import repeated_questions
 from app.workflow.states import State
 from app.workflow.understanding import Understander
 from app.workflow.view import TurnView
-from evals.budget import Budget, DailyLimitReached, Limits
+from evals.budget import MODEL_LIMITS, Budget, DailyLimitReached, Limits
 from evals.cases import Case, Special, load_cases
 from evals.common import norm, say
 
@@ -441,6 +441,12 @@ def run(
     return results
 
 
+def _quota_file(settings: Settings) -> Path:
+    if settings.gemini_model == "gemini-3.5-flash-lite":
+        return RUNS / "quota.json"
+    return RUNS / f"quota-{settings.gemini_model}.json"
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--run", required=True)
@@ -448,6 +454,7 @@ def main() -> None:
     parser.add_argument("--only", nargs="*")
     parser.add_argument("--limit", type=int)
     parser.add_argument("--dataset", type=Path, help="default: the 61 scripted cases")
+    parser.add_argument("--model", help="override GEMINI_MODEL (e.g. gemma-4-26b-a4b-it)")
     args = parser.parse_args()
     if args.dry_run:
         from tests.e2e_server import RuleUnderstander
@@ -456,11 +463,12 @@ def main() -> None:
         understander: Understander = RuleUnderstander()
         limits = Limits(rpm=10**6, tpm=10**9, rpd=10**6)
     else:
-        settings = Settings()
+        settings = Settings(gemini_model=args.model) if args.model else Settings()
         understander = build_understander(settings)
-        limits = Limits()
-    # Live runs (V2 and the V1 baseline) share one daily count: they use the same key.
-    quota = RUNS / args.run / "budget.json" if args.dry_run else RUNS / "quota.json"
+        limits = MODEL_LIMITS[settings.gemini_model]
+    # Live runs share one daily count per model (V2 and the V1 baseline use the same key
+    # and model); another model (Gemma) has its own quota and its own count.
+    quota = RUNS / args.run / "budget.json" if args.dry_run else _quota_file(settings)
     budget = Budget(quota, limits)
     path = run(
         args.run, understander, settings, budget, set(args.only or ()), args.limit, args.dataset

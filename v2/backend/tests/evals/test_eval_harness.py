@@ -138,3 +138,15 @@ def test_heldout_file_converts_without_changing_wording_and_plays(
     assert (result["outcome"], result["submitted"]) == ("done", True)
     assert result["final"]["full_name"]["value"] == "Robin Hale"
     assert result["final"]["inquiry_reason"]["value"] == "something_else"
+
+
+def test_gemma_limits_are_20_rpm_and_11k_tpm(tmp_path: Path) -> None:
+    from evals.budget import MODEL_LIMITS
+
+    gemma = MODEL_LIMITS["gemma-4-26b-a4b-it"]
+    assert (gemma.rpm, gemma.tpm, gemma.rpd) == (20, 11_000, 11_520)
+    t = FakeTime()
+    budget = Budget(tmp_path / "g.json", gemma, clock=t.clock, sleep=t.sleep, today=lambda: "d")
+    budget.after_turn(requests=2, tokens=5_500)  # tokens are hit first: 5 500 + 4 x 1 500 > 11K
+    budget.before_turn()
+    assert t.slept

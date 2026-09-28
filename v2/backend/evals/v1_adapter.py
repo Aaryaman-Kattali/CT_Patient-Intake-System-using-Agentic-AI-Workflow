@@ -28,6 +28,7 @@ import re
 import sys
 import time
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -96,7 +97,7 @@ FIELD_PATTERNS: list[tuple[str, str]] = [
     ("relationship", r"relationship"),
     ("inquiry_reason", r"reason for|reason of|inquiry reason"),
     ("gender", r"\bgender\b"),
-    ("email", r"e-?mail"),
+    ("email", r"e-?mail(?! agent)"),  # "the email agent" is V1's next step, not a question
     ("phone", r"phone number|\bphone\b"),
     ("address", r"(?<!e-mail )(?<!email )\baddress\b"),
     ("full_name", r"\bname\b"),
@@ -127,7 +128,7 @@ V1_FIELDS = {  # V1's JSON record key -> V2 field
 # Words that are part of another field's question, not questions of their own.
 SHADOWED = {
     "preferred_contact_method": {"phone", "email"},  # its options: "Phone, Email, Mail, Text"
-    "contact_details": {"phone", "email"},
+    "contact_details": {"phone", "email", "address"},  # "(phone/email/address)"
     "referral_provider_name": {"full_name"},  # "the name of the referring provider"
     "referral_mode": {"phone"},  # its options: "Fax, Phone, Webforms"
 }
@@ -153,20 +154,39 @@ def read_message(text: str) -> tuple[bool, list[str]]:
     return False, asked_fields(text)
 
 
-def score_turns(turns: list[dict[str, Any]]) -> tuple[list[int], int]:
-    """Questions per V1 message, and repeated questions: a field asked again after the user
-    already answered it. The same rules as the live conversation, from the stored text."""
+@dataclass(frozen=True)
+class Scored:
+    questions: list[int]  # questions per V1 message
+    repeats: int  # a field asked again later, after the user answered it and V1 moved on
+    retries: int  # a field asked again in the very next message (V1 refused the answer)
+
+
+def score_turns(turns: list[dict[str, Any]]) -> Scored:
+    """The same rules as the live conversation, applied to the stored text.
+
+    - retry after refusal: V1 asks the field it asked in its previous message again, right
+      after the user answered it (e.g. "Male or Female" after "I would rather not say").
+    - repeat: V1 asks for a field the user answered earlier, after moving on. "Contact
+      details" counts as a repeat when an email or phone number was already given (audit D3).
+    """
     answered: set[str] = set()
-    questions, repeated = [], 0
+    previous: str | None = None
+    questions: list[int] = []
+    repeats = retries = 0
     for turn in turns:
         if "assistant" not in turn:
             continue  # an API failure
         confirming, fields = read_message(turn["assistant"])
         questions.append(1 if confirming else questions_in(turn["assistant"]))
-        repeated += len(set(fields) & answered)
+        for f in set(fields):
+            if f == previous and f in answered:
+                retries += 1
+            elif f in answered or (f == "contact_details" and answered & {"email", "phone"}):
+                repeats += 1
+        previous = fields[0] if fields else None
         if fields:
             answered.add(fields[0])  # the simulated user answers the field asked first
-    return questions, repeated
+    return Scored(questions, repeats, retries)
 
 
 def answer_for(case: Case, field: str) -> str:

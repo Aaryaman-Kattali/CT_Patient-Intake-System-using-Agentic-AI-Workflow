@@ -38,6 +38,15 @@ class Limits:
     tpm: int = EVAL_TPM
     rpd: int = EVAL_RPD
     worst_requests: int = WORST_REQUESTS_PER_TURN
+    tokens_per_request: int = WORST_TOKENS_PER_REQUEST  # worst-case estimate before a turn
+
+
+# Per model: 70 % of RPM and TPM (as the owner set them), 80 % of RPD.
+MODEL_LIMITS = {
+    "gemini-3.5-flash-lite": Limits(),  # key: 15 RPM, 250K TPM, 500 RPD
+    # key: 30 RPM, 16K TPM, 14.4K RPD. 20 RPM and 11K TPM, whichever is hit first.
+    "gemma-4-26b-a4b-it": Limits(rpm=20, tpm=11_000, rpd=11_520, tokens_per_request=1_500),
+}
 
 
 class Budget:
@@ -93,7 +102,7 @@ class Budget:
             requests, tokens = self._recent()
             if (
                 requests + worst <= self.limits.rpm
-                and tokens + worst * WORST_TOKENS_PER_REQUEST <= self.limits.tpm
+                and tokens + worst * self.limits.tokens_per_request <= self.limits.tpm
             ):
                 return
             oldest = self._window[0][0]
