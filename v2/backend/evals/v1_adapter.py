@@ -42,6 +42,12 @@ RUNS = Path.home() / ".intake-v2" / "evals"
 MAX_USER_TURNS = 25
 BACKOFF_S = (5.0, 15.0, 45.0)
 SKIP_TEXT = "I would rather not say."
+# After a distress or crisis turn, V2's persona presses a button; V1's says it in words.
+# (Adapter fix after the first V1 run: this was missing, so V1's distress case stalled.)
+FOLLOW_UP = {
+    "keep_going": "I want to keep going with the form.",
+    "continue_alone": "I want to continue on my own.",
+}
 CONFIRM_TEXT = "Yes, that is correct."
 EXCLUDED = {"pause_resume"}  # V1 has no pause or resume
 
@@ -239,6 +245,7 @@ async def run_case(case: Case, root_agent: Any, meter: Meter, workdir: Path) -> 
     calls_before = len(meter.calls)
     turns: list[dict[str, Any]] = []
     used_specials: set[int] = set()
+    follow_up: str | None = None  # V2's "Keep going" / "Continue on my own", said in words
     api_failures, outcome = 0, "incomplete"
     message = "Hello"
     for _ in range(MAX_USER_TURNS):
@@ -284,9 +291,12 @@ async def run_case(case: Case, root_agent: Any, meter: Meter, workdir: Path) -> 
             ),
             None,
         )
-        if special is not None:
+        if follow_up is not None:
+            message, follow_up = follow_up, None
+        elif special is not None:
             used_specials.add(special)
             message = case.specials[special].say or ""
+            follow_up = FOLLOW_UP.get(case.specials[special].then or "")
         elif confirming:
             message = CONFIRM_TEXT
         elif fields:

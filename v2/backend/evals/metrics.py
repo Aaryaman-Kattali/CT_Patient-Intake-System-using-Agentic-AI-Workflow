@@ -19,6 +19,7 @@ from app.config import load_region_content
 from evals.cases import Case, load_cases
 from evals.common import norm, say
 from evals.runner import RUNS
+from evals.v1_adapter import FORMAT_DEMAND
 
 CRISIS = load_region_content("US").crisis.heading
 
@@ -69,13 +70,18 @@ def percentile(values: list[float], q: float) -> float | None:
     return ordered[min(len(ordered) - 1, round(q * (len(ordered) - 1)))]
 
 
-def field_accuracy(results: list[dict[str, Any]], cases: dict[str, Case]) -> dict[str, Any]:
+def field_accuracy(
+    results: list[dict[str, Any]], cases: dict[str, Case], fields: set[str] | None = None
+) -> dict[str, Any]:
+    """`fields`: only these fields (e.g. the ones V1 also collects, for a fair comparison)."""
     per_field: dict[str, list[bool]] = defaultdict(list)
     misses = []
     for r in results:
         if r["outcome"] == "api_failed":
             continue
         for field, exp in cases[r["id"]].expected.items():
+            if fields is not None and field not in fields:
+                continue
             got = r["final"].get(field)
             ok = (
                 got is not None
@@ -270,8 +276,11 @@ def calls(results: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def summarize(run: str) -> dict[str, Any]:
-    results = load(run)
+def summarize(
+    run: str, only: set[str] | None = None, fields: set[str] | None = None
+) -> dict[str, Any]:
+    """`only`: these case ids; `fields`: score only these fields (both for comparing to V1)."""
+    results = [r for r in load(run) if not only or r["id"] in only]
     cases = all_cases()
     intended = [r for r in results if cases[r["id"]].complete]
     api_turns = sum(t["api_failure"] for r in results for t in r["turns"])
@@ -291,10 +300,23 @@ def summarize(run: str) -> dict[str, Any]:
         "outcomes": dict(Counter(r["outcome"] for r in results)),
         "completion_rate": pct(sum(r["submitted"] for r in intended), len(intended)),
         "repeated_questions": sum(r["repeated_questions"] for r in results),
+        # The same field asked again right after a typed answer (a retry: the answer was not
+        # accepted). Not a "repeated question" by the spec's definition; shown for V1 parity.
+        "reasked_after_typed_answer": sum(
+            t["how"] == "typed"
+            and bool(t["question"])
+            and t["question"][0] == "field"
+            and t["question"][1] == t["field"]
+            for r in results
+            for t in r["turns"]
+        ),
         "turns_with_more_than_one_question": sum(
             t["question_marks"] > 1 for r in results for t in r["turns"]
         ),
-        "field_accuracy": field_accuracy(results, cases),
+        "field_accuracy": field_accuracy(results, cases, fields),
+        "messages_demanding_a_format": sum(
+            bool(FORMAT_DEMAND.search(x)) for r in results for t in r["turns"] for x in t["texts"]
+        ),
         "reply_kinds": reply_kinds(results),
         "unnecessary_confirmations": len(unnecessary),
         "unnecessary_confirmation_cases": unnecessary,
@@ -337,7 +359,7 @@ def main() -> None:
 
 def summarize_v1(run: str) -> dict[str, Any]:
     """The §14.2 metrics that apply to V1. Heuristics are documented in v1_adapter.py."""
-    from evals.v1_adapter import FORMAT_DEMAND, V1_FIELDS, score_turns, v1_value_matches
+    from evals.v1_adapter import V1_FIELDS, score_turns, v1_value_matches
 
     results = load(run)
     cases = all_cases()
@@ -364,6 +386,15 @@ def summarize_v1(run: str) -> dict[str, Any]:
         if forbidden & record_values or sent:
             unsafe.append(r["id"])
     grades = [float(textstat.flesch_kincaid_grade(t["assistant"])) for t in turns if t["assistant"]]
+    system_grades = []  # (a): the same placeholder method as V2, with V1's saved record too
+    for r in results:
+        record = {str(v) for v in (r["record"] or {}).values() if v}
+        values = user_values({"final": {}}, cases[r["id"]]) | record
+        system_grades += [
+            float(textstat.flesch_kincaid_grade(system_text(t["assistant"], values)))
+            for t in r["turns"]
+            if t.get("assistant")
+        ]
     rows = [c for r in results for c in r["llm_calls"]]
     return {
         "run": run,
@@ -380,7 +411,10 @@ def summarize_v1(run: str) -> dict[str, Any]:
         "messages_demanding_a_format": sum(
             bool(FORMAT_DEMAND.search(t["assistant"])) for t in turns
         ),
-        "grade_6_or_lower": pct(sum(g <= 6 for g in grades), len(grades)),
+        "a_system_text_grade_6_or_lower": pct(
+            sum(g <= 6 for g in system_grades), len(system_grades)
+        ),
+        "b_full_message_grade_6_or_lower": pct(sum(g <= 6 for g in grades), len(grades)),
         "median_grade": statistics.median(grades) if grades else None,
         "unsafe_accepted": len(unsafe),
         "unsafe_cases": unsafe,
