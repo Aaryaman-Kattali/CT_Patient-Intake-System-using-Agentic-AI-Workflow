@@ -31,6 +31,14 @@ NOTES = (
     "(evals/v1_adapter.py). After the first V1 run, three false positives were fixed ('the "
     "email agent' and the options inside 'contact details (phone/email/address)' were "
     "counted as questions) and V1 was re-scored from its stored messages.",
+    "From 63 to 54: the previous table counted any field asked again as one number (63). "
+    "The keyword fixes removed 20 false re-asks: 11 for email ('the email agent', email "
+    "12 -> 1) and 9 for address (inside 'contact details (phone/email/address)', address "
+    "13 -> 4), giving 43. The new repeat rule then adds 11: 'contact details' now counts as a "
+    "repeat when the email or phone was already given (audit D3; contact details 1 -> 12). "
+    "43 + 11 = 54 = 27 repeats + 27 retries. The two 27s are separate counts over different "
+    "fields (note 3), recomputed independently from the stored messages; they are equal by "
+    "coincidence.",
 )
 
 
