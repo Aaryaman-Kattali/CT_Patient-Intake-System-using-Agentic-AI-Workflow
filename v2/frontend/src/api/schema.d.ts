@@ -479,6 +479,8 @@ export interface components {
             options: components["schemas"]["OptionView"][];
             /** Text */
             text: string;
+            /** Value */
+            value?: string | null;
             /** Why */
             why: string;
         };

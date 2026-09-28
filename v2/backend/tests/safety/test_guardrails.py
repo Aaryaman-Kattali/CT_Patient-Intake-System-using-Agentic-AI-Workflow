@@ -137,8 +137,13 @@ def test_inferred_values_always_require_confirmation(
 
 def test_corrections_need_quote_and_explicit_source() -> None:
     answers = build(full_name="Alex Rivera")
-    allow = policy.ChangeValue("full_name", S.EXPLICIT, quoted_correction=True)
-    assert policy.decide(State.COLLECTING, answers, allow).verdict is Verdict.ALLOW
+    quoted = policy.ChangeValue("full_name", S.EXPLICIT, quoted_correction=True)
+    decision = policy.decide(State.COLLECTING, answers, quoted)
+    # Q7 (after eval run 1): even a quoted correction to another field needs a yes.
+    assert (decision.verdict, decision.reason) == (
+        Verdict.REQUIRE_CONFIRMATION,
+        "correction_needs_yes",
+    )
     for action in (
         policy.ChangeValue("full_name", S.INFERRED, quoted_correction=True),
         policy.ChangeValue("full_name", S.EXPLICIT, quoted_correction=False),

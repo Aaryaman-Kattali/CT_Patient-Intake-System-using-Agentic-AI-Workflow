@@ -22,6 +22,7 @@ from uuid import UUID
 
 from app.agents.understanding_agent import build_understander
 from app.config import Settings
+from app.domain import templates as t
 from app.domain.fields import FieldState
 from app.services.intake_service import IntakeService, TurnResult
 from app.services.persistence import IntakeRepository, create_db_engine
@@ -38,12 +39,26 @@ log = logging.getLogger("evals.runner")
 RUNS = Path.home() / ".intake-v2" / "evals"
 API_FAILURES = ("llm_timeout", "llm_error", "llm_no_key")  # not the model's fault
 MAX_STEPS = 120
+# Buttons a held-out script can press besides the answer options.
+ACTION_COMMANDS: dict[str, c.Command] = {
+    "start": c.Start(),
+    "resume": c.Resume(),
+    "continue_alone": c.ContinueAlone(),
+    "take_a_break": c.Pause(),
+    "keep_going": c.KeepGoing(),
+    "talk_to_a_person": c.TalkToPerson(),
+    "undo": c.Undo(),
+    "answer_later": c.Skip(),
+    "submit": c.Submit(),
+}
+BAR_LABELS = {t.BUTTONS["skip"].casefold(), t.BUTTONS["answer_later"].casefold()}
 BACKOFF_S = (5.0, 15.0, 45.0)
 
 
 def texts_of(view: TurnView) -> list[str]:
     q = view.question
-    return [x for x in (view.acknowledgement, *view.info, q.text if q else None) if x]
+    value = q.value if q else None  # the value box under a checking question
+    return [x for x in (view.acknowledgement, *view.info, q.text if q else None, value) if x]
 
 
 class CaseRun:
@@ -64,11 +79,13 @@ class CaseRun:
         self.api_failures = 0
         self.outcome = "done"
         self.submit_tries = 0
+        self.script_pos = 0  # held-out cases: the next scripted turn
 
     # --- the loop ----------------------------------------------------------------------
 
     def run(self) -> dict[str, Any]:
-        self._send(c.Start(), "button", None)
+        if not self.case.script:  # a held-out script presses Start itself
+            self._send(c.Start(), "button", None)
         for _ in range(MAX_STEPS):
             if self.view.state is State.SUBMITTED or self.outcome != "done":
                 break
@@ -79,6 +96,8 @@ class CaseRun:
         return self._result()
 
     def _step(self) -> bool:
+        if self.case.script:
+            return self._scripted()
         v = self.view
         if v.state is State.PAUSED:  # come back with the code, as on another device
             opened = self.s.open_with_resume_code(v.resume_code or "")
@@ -101,6 +120,42 @@ class CaseRun:
         if q.kind == "field":
             return self._field(q.field_id, q.can_skip or q.can_defer)
         return self._queue(q.kind, q.field_id, [o.id for o in q.options])
+
+    def _scripted(self) -> bool:
+        """Held-out case: play the owner's next turn, exactly as written."""
+        v = self.view
+        if self.script_pos >= len(self.case.script):
+            if v.state is State.REVIEW and self.submit_tries == 0:
+                self.submit_tries += 1
+                return self._send(c.Submit(), "button", None)
+            self.outcome = "done" if v.state is State.SUBMITTED else "script_ended"
+            return False
+        turn = self.case.script[self.script_pos]
+        self.script_pos += 1
+        field = v.question.field_id if v.question else None
+        if not turn.startswith("[button]"):
+            return self._send(c.Text(text=turn), "typed", field)
+        command = self._button(turn[len("[button]") :].strip())
+        if command is None:
+            self.outcome = f"unknown_button:{turn}"
+            return False
+        return self._send(command, "button", field)
+
+    def _button(self, label: str) -> c.Command | None:
+        """The button with these words on the current screen, as the UI shows it."""
+        q = self.view.question
+        for option in q.options if q else ():
+            if option.free_text and label.casefold().startswith(option.label.casefold() + ":"):
+                typed = label[len(option.label) + 1 :].strip()
+                return c.Choose(option_id=option.id, extra_text=typed)
+            if option.label.casefold() == label.casefold():
+                return c.Choose(option_id=option.id)
+        for action in self.view.actions:
+            if action.label.casefold() == label.casefold() and action.id in ACTION_COMMANDS:
+                return ACTION_COMMANDS[action.id]
+        if q and q.kind == "field" and label.casefold() in BAR_LABELS:
+            return c.Skip()
+        return None
 
     def _field(self, field: str, skippable: bool) -> bool:
         special = next(
@@ -162,7 +217,7 @@ class CaseRun:
         item = snap.queue[0]
         expected = self.case.expected.get(field)
         want = norm(expected.value) if expected else None
-        if kind in ("confirm_extra", "confirm_value"):
+        if kind in ("confirm_extra", "confirm_value", "confirm_change"):
             yes = want is not None and norm(item.value) == want
             self.confirmations.append(
                 {"field": field, "kind": kind, "answer": "yes" if yes else "no"}
@@ -286,6 +341,7 @@ class CaseRun:
                 "question": (view.question.kind, view.question.field_id)
                 if view and view.question
                 else None,
+                "question_text": view.question.text if view and view.question else None,
                 "question_marks": sum(x.count("?") for x in texts),
                 "texts": texts,
             }
@@ -310,6 +366,7 @@ class CaseRun:
                 f: {
                     "status": st.status.value,
                     "value": st.value,
+                    "display": st.display,
                     "unresolved_other": st.unresolved_other,
                     "source": st.source.value if st.source else None,
                 }
@@ -350,6 +407,7 @@ def run(
     budget: Budget,
     only: set[str] | None = None,
     limit: int | None = None,
+    dataset: Path | None = None,
 ) -> Path:
     folder = RUNS / run_name
     folder.mkdir(parents=True, exist_ok=True)
@@ -363,7 +421,8 @@ def run(
         }
     repo = IntakeRepository(create_db_engine(f"sqlite:///{(folder / 'intake.db').as_posix()}"))
     service = IntakeService(repo, understander, settings)
-    cases = [c for c in load_cases() if (not only or c.id in only) and c.id not in done]
+    all_cases = load_cases(dataset) if dataset else load_cases()
+    cases = [c for c in all_cases if (not only or c.id in only) and c.id not in done]
     for case in cases[:limit]:
         started = time.monotonic()
         try:
@@ -388,6 +447,7 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true", help="rule-based fake, no API calls")
     parser.add_argument("--only", nargs="*")
     parser.add_argument("--limit", type=int)
+    parser.add_argument("--dataset", type=Path, help="default: the 61 scripted cases")
     args = parser.parse_args()
     if args.dry_run:
         from tests.e2e_server import RuleUnderstander
@@ -402,7 +462,9 @@ def main() -> None:
     # Live runs (V2 and the V1 baseline) share one daily count: they use the same key.
     quota = RUNS / args.run / "budget.json" if args.dry_run else RUNS / "quota.json"
     budget = Budget(quota, limits)
-    path = run(args.run, understander, settings, budget, set(args.only or ()), args.limit)
+    path = run(
+        args.run, understander, settings, budget, set(args.only or ()), args.limit, args.dataset
+    )
     say(f"Results: {path}")
 
 

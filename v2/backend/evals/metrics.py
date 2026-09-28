@@ -28,8 +28,22 @@ CRISIS = load_region_content("US").crisis.heading
 ANSWERED = frozenset({"accepted", "confirmed"})
 
 
+# Held-out cases may say "not known": either way the form records it.
+NOT_KNOWN = frozenset({"dont_know", "unknown_confirmed"})
+
+
 def _same_status(got: str, expected: str) -> bool:
+    if expected == "not_known":
+        return got in NOT_KNOWN
     return got == expected or (got in ANSWERED and expected in ANSWERED)
+
+
+def all_cases() -> dict[str, Case]:
+    """The scripted cases plus the owner's held-out cases, if converted."""
+    from evals.heldout import OUTPUT as HELDOUT
+
+    cases = load_cases() + (load_cases(HELDOUT) if HELDOUT.exists() else [])
+    return {c.id: c for c in cases}
 
 
 def load(run: str) -> list[dict[str, Any]]:
@@ -159,20 +173,72 @@ def safety(results: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def wording(results: list[dict[str, Any]]) -> dict[str, Any]:
-    shown = {x for r in results for t in r["turns"] for x in t["texts"]}
-    questions = {
-        t["texts"][-1] for r in results for t in r["turns"] if t["question"] and t["texts"]
-    }
-    grades = {x: float(textstat.flesch_kincaid_grade(x)) for x in shown}
-    over = sorted((round(g, 1), x) for x, g in grades.items() if g > 6)
-    long_q = sorted(q for q in questions if len(q.split()) > 15)
+PLACEHOLDER = "X"
+USER_VALUE_PATTERNS = (
+    re.compile(r"[\w.+-]+@[\w-]+(\.[\w-]+)+"),  # email addresses
+    re.compile(r"\(?\d{3}\)?[ .-]?\d{3}[ .-]\d{4}"),  # phone numbers
+    re.compile(
+        r"\b(January|February|March|April|May|June|July|August|September|October"
+        r"|November|December) \d{1,2}, \d{4}\b"
+    ),  # dates as shown
+)
+
+
+def user_values(result: dict[str, Any], case: Case) -> set[str]:
+    """Everything in this case's messages that came from the user."""
+    values = {a.say for a in case.book.values() if a.say}
+    values |= {a.retry for a in case.book.values() if a.retry}
+    values |= {s.say for s in case.specials if s.say}
+    values |= {e.value for e in case.expected.values() if e.value}
+    values |= {e.unresolved_other for e in case.expected.values() if e.unresolved_other}
+    for got in result["final"].values():
+        values |= {got.get(k) for k in ("value", "display", "unresolved_other") if got.get(k)}
+    return {v for v in values if v and len(v) >= 2}
+
+
+def system_text(text: str, values: set[str]) -> str:
+    """The message with every user-provided value replaced by a placeholder."""
+    for value in sorted(values, key=len, reverse=True):
+        text = re.sub(re.escape(value), PLACEHOLDER, text, flags=re.IGNORECASE)
+    for pattern in USER_VALUE_PATTERNS:
+        text = pattern.sub(PLACEHOLDER, text)
+    return text
+
+
+def _grades(texts: set[str]) -> dict[str, float]:
+    return {x: float(textstat.flesch_kincaid_grade(x)) for x in texts}
+
+
+def wording(results: list[dict[str, Any]], cases: dict[str, Case]) -> dict[str, Any]:
+    """(a) system-authored text, user values replaced by a placeholder (target <= 6);
+    (b) the full rendered message (informational). Split after run 1: user values such as
+    email addresses and surnames count as long words and pushed fixed templates over 6."""
+    shown: set[str] = set()
+    system: set[str] = set()
+    questions: set[str] = set()
+    for r in results:
+        values = user_values(r, cases[r["id"]])
+        for t in r["turns"]:
+            shown |= set(t["texts"])
+            system |= {system_text(x, values) for x in t["texts"]}
+            question = t.get("question_text") or (t["texts"][-1] if t["question"] else None)
+            if question:
+                questions.add(system_text(question, values))
+    full, own = _grades(shown), _grades(system)
+    own_over = sorted((round(g, 1), x) for x, g in own.items() if g > 6)
     return {
-        "messages": len(shown),
-        "grade_6_or_lower": pct(len(shown) - len(over), len(shown)),
-        "max_grade": round(max(grades.values()), 1) if grades else None,
-        "over_grade_6": over,
-        "questions_over_15_words": long_q,
+        "a_system_text": {
+            "messages": len(own),
+            "grade_6_or_lower": pct(len(own) - len(own_over), len(own)),
+            "max_grade": round(max(own.values()), 1) if own else None,
+            "over_grade_6": own_over,
+        },
+        "b_full_message": {
+            "messages": len(full),
+            "grade_6_or_lower": pct(sum(g <= 6 for g in full.values()), len(full)),
+            "max_grade": round(max(full.values()), 1) if full else None,
+        },
+        "questions_over_15_words": sorted(q for q in questions if len(q.split()) > 15),
     }
 
 
@@ -206,7 +272,7 @@ def calls(results: list[dict[str, Any]]) -> dict[str, Any]:
 
 def summarize(run: str) -> dict[str, Any]:
     results = load(run)
-    cases = {c.id: c for c in load_cases()}
+    cases = all_cases()
     intended = [r for r in results if cases[r["id"]].complete]
     api_turns = sum(t["api_failure"] for r in results for t in r["turns"])
     typed = sum(t["how"] in ("typed", "special") for r in results for t in r["turns"])
@@ -234,7 +300,7 @@ def summarize(run: str) -> dict[str, Any]:
         "unnecessary_confirmation_cases": unnecessary,
         "cases_over_confirmation_budget": over_budget,
         "safety": safety(results),
-        "wording": wording(results),
+        "wording": wording(results, cases),
         "calls": calls(results),
         "api_failures": {
             "turns": api_turns,
@@ -274,7 +340,7 @@ def summarize_v1(run: str) -> dict[str, Any]:
     from evals.v1_adapter import FORMAT_DEMAND, V1_FIELDS, score_turns, v1_value_matches
 
     results = load(run)
-    cases = {c.id: c for c in load_cases()}
+    cases = all_cases()
     turns = [t for r in results for t in r["turns"] if "assistant" in t]
     scored = {r["id"]: score_turns(r["turns"]) for r in results}
     checks: list[bool] = []

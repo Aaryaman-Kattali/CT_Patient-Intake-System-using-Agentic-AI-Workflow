@@ -16,6 +16,7 @@ class PendingKind(StrEnum):
     CONFIRM_VALUE = "confirm_value"  # inferred or single-reading value for the asked field
     CONFLICT = "conflict"  # a new value differs from a saved one
     DATE_CHOICE = "date_choice"  # 04/05/2004: April 5 or May 4
+    CONFIRM_CHANGE = "confirm_change"  # a correction to another field: yes / no
 
 
 class Choice(BaseModel):

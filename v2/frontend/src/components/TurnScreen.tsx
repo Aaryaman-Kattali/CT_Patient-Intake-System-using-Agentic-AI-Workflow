@@ -36,6 +36,11 @@ export function TurnScreen({ view, headingRef, onCommand, onAction, onEdit }: Pr
       <h1 id={HEADING_ID} ref={headingRef} tabIndex={-1}>
         {heading}
       </h1>
+      {question?.value && (
+        <p className="checked-value">
+          {question.value}
+        </p>
+      )}
       {question && <Why key={`${view.turn}-${question.field_id}`} why={question.why} />}
       {rest.length > 0 && (
         <div className="info">

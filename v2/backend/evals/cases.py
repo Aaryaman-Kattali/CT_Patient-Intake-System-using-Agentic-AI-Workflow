@@ -60,6 +60,10 @@ class Case(_Model):
     max_confirmations: int = 0  # yes/no and date questions the case legitimately needs
     inferred_ok: tuple[str, ...] = ()  # fields where a yes/no on the asked field is fine
     complete: bool = True  # the script intends to send the form
+    added: str | None = None  # e.g. "after run 1": not part of the original 60
+    # Held-out cases (written by the owner): the turns in order, played whenever the form
+    # waits for the person. "[button] Words" presses a button; anything else is typed.
+    script: tuple[str, ...] = ()
 
 
 def load_cases(path: Path = DATASET) -> list[Case]:

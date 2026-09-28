@@ -52,8 +52,6 @@ SENTENCES = [
     t.SKIPPED,
     t.UPDATED,
     t.UNDONE,
-    t.CONFLICT_EARLIER,
-    t.CONFLICT_NOW,
     *t.START,
     *t.PAUSED,
     t.WELCOME_BACK,
@@ -86,8 +84,12 @@ SENTENCES = [
 ]
 
 COMPOSED_QUESTIONS = [
-    *(t.CONFIRM_VALUE.format(label=f.short_label.capitalize(), value="Sample") for f in FIELDS),
-    " ".join([t.CONFLICT_EARLIER, t.CONFLICT_NOW, t.CONFLICT_QUESTION]).format(**SAMPLE),
+    *(
+        template.format(label=label)
+        for f in FIELDS
+        for label in {f.label_self, f.label_other}
+        for template in (t.CONFIRM_VALUE, t.CONFIRM_CHANGE, t.CONFLICT)
+    ),
     t.DATE_CHOICE,
 ]
 

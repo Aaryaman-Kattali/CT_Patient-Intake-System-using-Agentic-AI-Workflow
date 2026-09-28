@@ -35,11 +35,12 @@ UPDATED = "Updated: {short_label} is {value}."
 UNDONE = "Changed back: {short_label} is {value}."
 
 # --- Single questions built from fixed parts. Exactly one "?" each.
-CONFIRM_VALUE = "{label}: {value}. Is that right?"
+# The question is plain text; the value is shown on its own, below it (QuestionView.value).
+CONFIRM_VALUE = "Is this {label}?"
+CONFIRM_CHANGE = "Do you want to change {label} to this?"
 DATE_CHOICE = "Which date do you mean?"
-CONFLICT_EARLIER = "Earlier you said {old}."
-CONFLICT_NOW = "Now you said {new}."
-CONFLICT_QUESTION = "Which one is correct?"
+# Both values are the answer buttons.
+CONFLICT = "You gave two answers for {label}. Which one is correct?"
 
 # --- Start, pause, resume.
 START = (

@@ -98,8 +98,11 @@ States roughly how many questions there are ("about 12"), that the user can stop
 
 ### 3.5 Corrections and conflicts
 
-- **Conflict** (a new value for an already-saved field, without the user saying it is a correction): "Earlier you said May 4, 2004. Now you said June 4, 2004. Which one is correct?" Both values are shown as buttons, plus "Neither".
-- **Explicit correction** ("sorry, my birthday is May 14"): saved directly **only if** the reply kind is CORRECTION **and** the new value is `explicit` and quoted from the user's message (`raw_text` check, §6.3). The next message starts with the full new value, "Updated: date of birth is May 14, 2004.", and shows an **Undo** button next to it, followed by the next question. Undo restores the previous value and status (`correction_undone` event). It is offered only on the turn right after the correction. Inferred or unclear changes always go through the conflict question.
+- **Questions that check a value** are plain text, and the value is shown on its own, below the question (`question.value`): "Is this your email address?" with the address in a box underneath. So the question itself stays short and at grade 6 or lower whatever the value is.
+- **Conflict** (a new value for an already-saved field, without the user saying it is a correction): "You gave two answers for your date of birth. Which one is correct?" Both values are the answer buttons, plus "Neither" and "I'm not sure".
+- **Correction to a field that is not being asked** (for example, while answering the email question: "sorry, my birthday is May 14"): **never saved directly** (updated after eval run 1). The user sees "Do you want to change your date of birth to this?" with the full new value below it, and answers yes or no. Yes saves it (`field_corrected`, with the previous value in the event); no keeps the saved value. Only a CORRECTION whose new value is `explicit` and quoted from the message (`raw_text` check, §6.3) gets this question; inferred or unclear changes go through the conflict question.
+- **Correction to the field being asked** (a field re-opened from review): saved directly, with "Updated: date of birth is May 14, 2004." and an **Undo** button, offered only on the next turn. Undo restores the previous value and status (`correction_undone` event).
+- *Why this changed:* in eval run 1, a staff persona typed "DOB 2026-05-22" while answering the referral date. The model read it, reasonably, as a correction, and the old rule saved it over the date of birth without a question. A correction to a field the user is not looking at now always gets a yes/no with the full value.
 - The wording never suggests fault.
 
 ### 3.6 WCAG 2.2 AA (web)
@@ -438,7 +441,8 @@ For each proposal:
 | explicit, other field, valid, field empty | queue a yes/no confirmation (P5) |
 | inferred (any field) | queue a yes/no confirmation |
 | any, field already has a different value, kind ≠ CORRECTION | queue a conflict question |
-| explicit, kind = CORRECTION, `raw_text` quoted from message, valid | save the new value, record a `field_corrected` event, show "Updated: <label> is <full value>." + Undo |
+| explicit, kind = CORRECTION, `raw_text` quoted from message, valid, **another field** | queue a yes/no with the full new value ("Do you want to change <label> to this?"); yes saves it (`field_corrected`) |
+| the **pending** field, already answered (re-opened from review), valid | save the new value (`field_corrected`), show "Updated: <label> is <full value>." + Undo |
 | inferred, or kind ≠ CORRECTION, field already has a value | conflict question (never a silent overwrite) |
 | ambiguous date | queue a two-button date choice |
 
@@ -903,7 +907,7 @@ I renumbered to match your order: you listed six implementation steps under "Pha
 | Q4 | `preferred_name` (optional; once given, used in greetings) and `gender` (optional, inclusive options plus "Prefer not to say") are included. |
 | Q5 | The owner reviews the §5.3 wording before Phase 3 and sends edits. §5.3 is a draft until then. |
 | Q6 | The staff summary is deterministic. |
-| Q7 | Direct save with "Updated: …" + Undo only when kind = CORRECTION and the new value is quoted from the message. Everything else goes through the conflict question. |
+| Q7 | **Updated after eval run 1:** a correction to a field that is **not** being asked is never saved directly: the user gets a yes/no with the full new value (kind = CORRECTION, explicit, quoted), or the conflict question (anything else). A correction to the field being asked (re-opened from review) is saved directly with "Updated: …" + Undo. *Original:* direct save + Undo whenever kind = CORRECTION and the value was quoted. |
 
 Additional regression tests from these decisions:
 - `test_correction_requires_quoted_value`

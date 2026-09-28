@@ -62,6 +62,8 @@ def offered(view: TurnView) -> list[Offer]:
                 ReplyKind.ANSWER_PLUS_EXTRA, (q.field_id, value), (other, OTHER[other])
             )
             offers.append(("text+extra", c.Text(text=f"{value}, {OTHER[other]}"), extra))
+            fix = understood(ReplyKind.CORRECTION, (q.field_id, value), (other, OTHER[other]))
+            offers.append(("text+correction", c.Text(text=f"{value}, sorry {OTHER[other]}"), fix))
         if q.kind == "field" and (q.can_skip or q.can_defer):
             offers.append(("skip", c.Skip(), None))
     if view.review is not None:

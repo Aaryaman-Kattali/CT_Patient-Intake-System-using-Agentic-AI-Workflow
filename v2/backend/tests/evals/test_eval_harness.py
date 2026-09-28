@@ -63,10 +63,11 @@ def test_budget_stops_cleanly_at_the_daily_limit_and_resets_next_day(tmp_path: P
     assert again.used_today() == 0
 
 
-def test_dataset_is_60_synthetic_cases_across_13_categories() -> None:
+def test_dataset_is_61_synthetic_cases_across_14_categories() -> None:
     cases = load_cases()
-    assert len(cases) == 60
-    assert len(Counter(c.category for c in cases)) == 13
+    assert len(cases) == 61  # 60 original + 1 added after run 1
+    assert len(Counter(c.category for c in cases)) == 14
+    assert [c.id for c in cases if c.added] == ["different_question-61"]
     text = json.dumps([c.model_dump(mode="json") for c in cases])
     emails = re.findall(r"[\w.+-]+@([\w-]+\.)+\w+", text)
     assert emails
@@ -98,3 +99,42 @@ def test_committed_dataset_matches_the_generator() -> None:
     from evals.build_dataset import build
 
     assert [c.model_dump() for c in build()] == [c.model_dump() for c in load_cases()]
+
+
+def test_system_text_replaces_user_values_with_a_placeholder() -> None:
+    from evals.metrics import system_text
+
+    values = {"Taylor Kowalski"}
+    assert (
+        system_text("Updated: full name is Taylor Kowalski.", values) == "Updated: full name is X."
+    )
+    assert system_text("Email address: a.b@example.com. Is that right?", set()) == (
+        "Email address: X. Is that right?"
+    )
+    assert system_text("Updated: date of birth is May 14, 2004.", set()) == (
+        "Updated: date of birth is X."
+    )
+
+
+def test_heldout_file_converts_without_changing_wording_and_plays(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from evals.heldout import convert
+
+    source = Path(__file__).parent / "data" / "sample-heldout.md"
+    case = convert(source)
+    lines = [x[2:] for x in source.read_text(encoding="utf-8").splitlines() if x.startswith("- ")]
+    assert list(case.script) == lines[: len(case.script)]  # the owner's words, unchanged
+    assert case.expected["date_of_birth"].value == "1990-03-15"
+    assert case.expected["inquiry_reason"].value == "something_else"
+    assert case.expected["phone"].status == "skipped"
+
+    dataset = tmp_path / "heldout.jsonl"
+    dataset.write_text(json.dumps(case.model_dump(mode="json")) + "\n", encoding="utf-8")
+    monkeypatch.setattr(runner, "RUNS", tmp_path)
+    budget = Budget(tmp_path / "b.json", Limits(rpm=10**6, tpm=10**9, rpd=10**6))
+    out = runner.run("h", RuleUnderstander(), Settings(_env_file=None), budget, dataset=dataset)
+    result = json.loads(out.read_text(encoding="utf-8").splitlines()[0])
+    assert (result["outcome"], result["submitted"]) == ("done", True)
+    assert result["final"]["full_name"]["value"] == "Robin Hale"
+    assert result["final"]["inquiry_reason"]["value"] == "something_else"

@@ -602,8 +602,27 @@ def build() -> list[Case]:
             )
         )
 
-    if len(cases) != 60 or len({c.id for c in cases}) != 60:
-        raise ValueError(f"expected 60 distinct cases, built {len(cases)}")
+    # 14. answers a different question (added after run 1, from its transcript): while the
+    # referral date is asked, the staff member types a date labelled as the date of birth.
+    b = new("pr", "staff")
+    ref_iso = b.expected["referral_date"].value or ""
+    cases.append(
+        b.case(
+            "different_question",
+            added="after run 1",
+            max_confirmations=1,
+            specials=(
+                Special(
+                    at="referral_date",
+                    say=f"DOB {ref_iso}",
+                    kinds=("correction", "answer_plus_extra", "answer"),
+                ),
+            ),
+        )
+    )
+
+    if len(cases) != 61 or len({c.id for c in cases}) != 61:
+        raise ValueError(f"expected 61 distinct cases, built {len(cases)}")
     return cases
 
 

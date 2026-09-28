@@ -86,7 +86,8 @@ def test_extra_value_is_confirmed_not_silently_accepted(d: Driver) -> None:
     assert view.acknowledgement == "Saved."
     assert view.question is not None
     assert view.question.kind == "confirm_extra"
-    assert view.question.text == "Date of birth: May 4, 2004. Is that right?"
+    assert view.question.text == "Is this your date of birth?"
+    assert view.question.value == "May 4, 2004"  # shown on its own, below the question
     view = d.choose("yes")
     assert view.question is not None
     assert view.question.field_id != "date_of_birth"  # skipped: already answered
@@ -112,7 +113,8 @@ def test_inferred_value_for_asked_field_needs_confirmation(d: Driver) -> None:
     view = d.text("my son", u)
     assert view.question is not None
     assert view.question.kind == "confirm_value"
-    assert view.question.text == "Who this form is for: My child. Is that right?"
+    assert view.question.text == "Is this who this form is for?"
+    assert view.question.value == "My child"
     d.choose("yes")
     assert d.events()[-1].type == "question_shown"
 
@@ -154,7 +156,7 @@ def test_unannounced_new_value_asks_which_is_correct(d: Driver) -> None:
     assert view.question is not None
     assert view.question.kind == "conflict"
     assert view.question.text == (
-        "Earlier you said May 4, 2004. Now you said June 4, 2004. Which one is correct?"
+        "You gave two answers for your date of birth. Which one is correct?"
     )
     assert [o.label for o in view.question.options] == [
         "May 4, 2004",
@@ -198,8 +200,10 @@ def test_later_change_clears_unresolved_conflict(d: Driver) -> None:
         "sorry, it is May 14 2004",
         understood(ReplyKind.CORRECTION, ("date_of_birth", "May 14 2004")),
     )
+    d.choose("yes")  # "Do you want to change your date of birth to this?"
     snap = d.service._repo.load(d.id)
     assert snap is not None
+    assert snap.answers["date_of_birth"].value == "2004-05-14"
     assert snap.answers["date_of_birth"].unresolved_other is None
 
 
@@ -212,15 +216,51 @@ def test_neither_asks_the_field_again_now(d: Driver) -> None:
     assert repeated_questions(d.events()) == 0  # the user asked for it: not a repeat
 
 
-def test_quoted_correction_saves_and_offers_undo(d: Driver) -> None:
-    _answered_dob(d)
+def _dob(d: Driver) -> str | None:
+    snap = d.service._repo.load(d.id)
+    assert snap is not None
+    return snap.answers["date_of_birth"].value
+
+
+def test_correction_to_another_field_asks_yes_no_with_the_new_value(d: Driver) -> None:
+    """Q7 (after eval run 1): a correction to a field that is not being asked is never saved
+    directly. The user sees the full new value and says yes or no."""
+    _answered_dob(d)  # now asking how to contact you
     u = understood(ReplyKind.CORRECTION, ("date_of_birth", "May 14 2004"))
     view = d.text("sorry, my birthday is May 14 2004", u)
+    assert view.question is not None
+    assert (view.question.kind, view.question.field_id) == ("confirm_change", "date_of_birth")
+    assert view.question.text == "Do you want to change your date of birth to this?"
+    assert view.question.value == "May 14, 2004"
+    assert _dob(d) == "2004-05-04"  # nothing saved yet
+    view = d.choose("yes")
+    assert view.acknowledgement == "Updated: date of birth is May 14, 2004."
+    assert _dob(d) == "2004-05-14"
+    assert [e for e in d.events() if e.type == "field_corrected"][-1].payload["previous"] == (
+        "2004-05-04"
+    )
+
+
+def test_correction_to_another_field_answered_no_keeps_the_value(d: Driver) -> None:
+    _answered_dob(d)
+    u = understood(ReplyKind.CORRECTION, ("date_of_birth", "May 14 2004"))
+    d.text("sorry, my birthday is May 14 2004", u)
+    view = d.choose("no")
+    assert _dob(d) == "2004-05-04"
+    assert view.question is not None
+    assert view.question.field_id == "preferred_contact_method"  # back where they were
+
+
+def test_correction_to_the_asked_field_saves_and_offers_undo(d: Driver) -> None:
+    """The field being asked (re-opened from review): saved directly, with Undo."""
+    d.run(FI_SELF_BOOK)
+    d.send(c.EditField(field_id="date_of_birth"))
+    view = d.text("May 14 2004")
     assert view.acknowledgement == "Updated: date of birth is May 14, 2004."
     assert "undo" in [a.id for a in view.actions]
     view = d.send(c.Undo())
     assert view.acknowledgement == "Changed back: date of birth is May 4, 2004."
-    assert d.service._repo.load(d.id).answers["date_of_birth"].value == "2004-05-04"  # type: ignore[union-attr]
+    assert _dob(d) == "2004-05-04"
 
 
 # --- provenance for the question being asked (spec §6.3 step 5) --------------------------

@@ -31,7 +31,8 @@ test("every screen type: accessible, one question, fixed layout", async ({ page 
   await expectQuestion(page, "What is your email address?");
   // An extra value in a reply: confirmed with yes/no, never saved silently.
   await answer(page, "alex@example.com; preferred_name=Alex");
-  await expectQuestion(page, "Name to use: Alex. Is that right?");
+  await expectQuestion(page, "Is this the name you want us to use?");
+  await expect(page.locator(".checked-value")).toHaveText("Alex");
   await checkScreen(page, "05-confirmation");
   await choose(page, "Yes");
 

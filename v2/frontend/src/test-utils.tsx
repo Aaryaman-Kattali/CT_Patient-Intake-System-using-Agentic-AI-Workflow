@@ -52,6 +52,7 @@ export function question(overrides: Partial<QuestionView> = {}): QuestionView {
     can_skip: false,
     can_defer: true,
     autocomplete: "off",
+    value: null,
     ...overrides,
   };
 }

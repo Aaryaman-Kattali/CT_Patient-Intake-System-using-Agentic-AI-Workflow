@@ -354,6 +354,17 @@
             "title": "Text",
             "type": "string"
           },
+          "value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          },
           "why": {
             "title": "Why",
             "type": "string"

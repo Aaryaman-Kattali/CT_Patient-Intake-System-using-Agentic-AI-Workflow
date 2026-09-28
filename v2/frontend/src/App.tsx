@@ -121,7 +121,8 @@ export function App() {
   useEffect(() => {
     if (!view || !ui || mode !== "turn") return;
     const { heading, rest } = headingOf(view, ui.labels.review_title ?? "");
-    setAnnouncement([view.acknowledgement, heading, ...rest].filter(Boolean).join(" "));
+    const value = view.question?.value; // the value being checked, read after the question
+    setAnnouncement([view.acknowledgement, heading, value, ...rest].filter(Boolean).join(" "));
   }, [view, ui, mode]);
 
   if (offline) return <p className="notice">{OFFLINE}</p>;
